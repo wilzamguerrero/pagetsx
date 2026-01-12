@@ -338,7 +338,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({ items, isLoading, colu
                   </motion.svg>
                 )}
               </AnimatePresence>
-              <img src="https://iili.io/fc6Elv2.gif" alt="Logo" className="w-42 h-42 md:w-52 md:h-52 object-contain pointer-events-none select-none z-10" />
+              <img src="https://miro.medium.com/v2/resize:fit:1400/1*44799UW8y4KGlJb36fTD7Q.gif" alt="Logo" className="w-42 h-42 md:w-52 md:h-52 object-contain pointer-events-none select-none z-10" />
           </motion.div>
           <div className="h-28 flex flex-col items-center justify-start mx-auto relative">
             <AnimatePresence mode="wait">
