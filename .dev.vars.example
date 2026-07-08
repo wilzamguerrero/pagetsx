@@ -1,0 +1,5 @@
+# Copia este archivo como `.dev.vars` para desarrollo local con wrangler.
+# Estas variables las lee el servidor (Cloudflare Pages Functions).
+
+# Secreto de la integración de Notion (server-side).
+NOTION_PORTFOLIO_KEY="secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"

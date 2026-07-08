@@ -29,7 +29,7 @@ const App: React.FC = () => {
   // Detectar si es móvil para columnas por defecto
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const [columnCount, setColumnCount] = useState(isMobile ? 1 : 4);
-  const [effectsEnabled, setEffectsEnabled] = useState(true);
+  const [effectsEnabled, setEffectsEnabled] = useState(false);
   const notionServiceRef = useRef<NotionService | null>(null);
   
   const strings = t(state.language);
@@ -318,9 +318,13 @@ const App: React.FC = () => {
         onSelectBoard={handleSelectBoard}
         onGoHome={handleGoHome}
         onCreateBoard={async (p, title) => {
-          const b = await notionServiceRef.current!.createBoard(p === 'root' ? state.rootPageId : p, title);
-          setState(prev => ({ ...prev, boards: [...prev.boards, b] }));
-          return b;
+          const parent = p === 'root' ? state.rootPageId : p;
+          const b = await notionServiceRef.current!.createBoard(parent, title);
+          // Los tableros de nivel raíz se muestran sin parentId en el árbol,
+          // igual que los que se extraen al cargar el contenido raíz.
+          const normalized = parent === state.rootPageId ? { ...b, parentId: undefined } : b;
+          setState(prev => ({ ...prev, boards: [...prev.boards, normalized] }));
+          return normalized;
         }}
         isOpen={isSidebarOpen}
         onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -331,6 +335,13 @@ const App: React.FC = () => {
         showDatabaseNames={SHOW_DATABASE_NAMES}
         effectsEnabled={effectsEnabled}
         onToggleEffects={() => setEffectsEnabled(prev => !prev)}
+        rootPageId={state.rootPageId}
+        onContentUploaded={(boardId) => {
+          // Si estamos viendo ese tablero, refrescar para mostrar los archivos nuevos
+          if (state.activeBoardId === boardId) {
+            handleSelectBoard(boardId, true);
+          }
+        }}
       />
       <main className={`flex-1 transition-all duration-500 flex flex-col min-w-0 ${isSidebarOpen ? `lg:blur-none blur-sm ${effectsEnabled ? 'glitch-active' : ''}` : ''}`}>
         {state.error && (

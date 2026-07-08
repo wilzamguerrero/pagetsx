@@ -4,9 +4,10 @@ import { Board, Language } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
     Folder, FileText, Database, ChevronRight, ChevronDown, ChevronLeft, 
-    Maximize, Minimize, Circle, Home, UserRound, Sparkles
+    Maximize, Minimize, Circle, Home, Sparkles, Upload, Plus, Check, X
 } from 'lucide-react';
 import { t } from '../services/i18nService';
+import { UploadPanel } from './UploadPanel';
 
 interface SidebarProps {
   boards: Board[];
@@ -23,6 +24,8 @@ interface SidebarProps {
   showDatabaseNames: boolean;
   effectsEnabled: boolean;
   onToggleEffects: () => void;
+  rootPageId: string;
+  onContentUploaded: (boardId: string) => void;
 }
 
 const MARKER_COLORS = [
@@ -43,13 +46,36 @@ const BoardTreeItem: React.FC<{
     boardMarkers: Record<string, string>,
     onSetMarker: (id: string, color: string) => void,
     strings: any,
-    showDatabaseNames: boolean
-}> = ({ board, allBoards, activeBoardId, onSelect, depth, boardMarkers, onSetMarker, strings, showDatabaseNames }) => {
+    showDatabaseNames: boolean,
+    uploadMode: boolean,
+    onUpload: (board: Board) => void,
+    onCreateBoard: (parentId: string, title: string) => Promise<Board>
+}> = ({ board, allBoards, activeBoardId, onSelect, depth, boardMarkers, onSetMarker, strings, showDatabaseNames, uploadMode, onUpload, onCreateBoard }) => {
     const children = allBoards.filter(b => b.parentId === board.id);
     const hasKnownChildren = children.length > 0;
     const isActive = activeBoardId === board.id;
     const [isExpanded, setIsExpanded] = useState(false);
     const [isPickingColor, setIsPickingColor] = useState(false);
+    const [isAddingChild, setIsAddingChild] = useState(false);
+    const [newChildTitle, setNewChildTitle] = useState('');
+    const [isCreatingChild, setIsCreatingChild] = useState(false);
+
+    // Solo se pueden crear sub-toggles y subir archivos dentro de toggles/páginas (no en bases de datos)
+    const canManage = board.type === 'toggle' || board.type === 'page';
+
+    const submitNewChild = async () => {
+        const title = newChildTitle.trim();
+        if (!title || isCreatingChild) return;
+        setIsCreatingChild(true);
+        try {
+            await onCreateBoard(board.id, title);
+            setNewChildTitle('');
+            setIsAddingChild(false);
+            setIsExpanded(true);
+        } finally {
+            setIsCreatingChild(false);
+        }
+    };
     
     // Las bases de datos que empiezan con * siempre se muestran (excepción a showDatabaseNames)
     const isStarredDatabase = board.type === 'database' && board.title.startsWith('*');
@@ -69,6 +95,9 @@ const BoardTreeItem: React.FC<{
                         onSetMarker={onSetMarker}
                         strings={strings}
                         showDatabaseNames={showDatabaseNames}
+                        uploadMode={uploadMode}
+                        onUpload={onUpload}
+                        onCreateBoard={onCreateBoard}
                     />
                 ))}
             </>
@@ -163,9 +192,27 @@ const BoardTreeItem: React.FC<{
                 </div>
                 
                 <div className="flex items-center gap-1 relative ml-1">
+                    {uploadMode && canManage && (
+                        <>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setIsAddingChild(v => !v); }}
+                                title="Nueva lista dentro"
+                                className="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-primary hover:bg-white/10 transition-all"
+                            >
+                                <Plus className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); onUpload(board); }}
+                                title="Subir archivos aquí"
+                                className="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-primary hover:bg-white/10 transition-all"
+                            >
+                                <Upload className="w-3.5 h-3.5" />
+                            </button>
+                        </>
+                    )}
                     <button 
                         onClick={(e) => { e.stopPropagation(); setIsPickingColor(!isPickingColor); }} 
-                        className={`w-3.5 h-3.5 flex items-center justify-center transition-all ${isPickingColor ? 'opacity-100 scale-110' : (currentColor ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')}`}
+                        className={`w-3.5 h-3.5 flex items-center justify-center transition-all ${uploadMode ? 'hidden' : ''} ${isPickingColor ? 'opacity-100 scale-110' : (currentColor ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')}`}
                     >
                         {currentColor ? <div className={`w-1.5 h-1.5 rounded-full ${activeMarker.class}`} /> : <Circle className="w-2.5 h-2.5 text-gray-600" />}
                     </button>
@@ -188,6 +235,36 @@ const BoardTreeItem: React.FC<{
                 </div>
             </div>
             
+            {isAddingChild && (
+                <div className="flex items-center gap-1.5 my-1" style={{ paddingLeft: `${(depth + 1) * 12 + 8}px` }}>
+                    <input
+                        autoFocus
+                        value={newChildTitle}
+                        onChange={(e) => setNewChildTitle(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') submitNewChild();
+                            if (e.key === 'Escape') { setIsAddingChild(false); setNewChildTitle(''); }
+                        }}
+                        placeholder="Nueva lista..."
+                        className="flex-1 min-w-0 bg-black/40 border border-white/10 focus:border-primary/40 rounded-md px-2 py-1 text-[12px] text-white placeholder-gray-600 outline-none"
+                    />
+                    <button
+                        onClick={(e) => { e.stopPropagation(); submitNewChild(); }}
+                        disabled={!newChildTitle.trim() || isCreatingChild}
+                        className="w-6 h-6 flex items-center justify-center rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-all disabled:opacity-30"
+                    >
+                        {isCreatingChild ? <div className="loader scale-[0.18] origin-center" /> : <Check className="w-3.5 h-3.5" />}
+                    </button>
+                    <button
+                        onClick={(e) => { e.stopPropagation(); setIsAddingChild(false); setNewChildTitle(''); }}
+                        className="w-6 h-6 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/10 transition-all"
+                    >
+                        <X className="w-3.5 h-3.5" />
+                    </button>
+                </div>
+            )}
+
             {isExpanded && (
                 <div className="relative">
                     {children.map(child => (
@@ -202,6 +279,9 @@ const BoardTreeItem: React.FC<{
                             onSetMarker={onSetMarker}
                             strings={strings}
                             showDatabaseNames={showDatabaseNames}
+                            uploadMode={uploadMode}
+                            onUpload={onUpload}
+                            onCreateBoard={onCreateBoard}
                         />
                     ))}
                 </div>
@@ -211,17 +291,31 @@ const BoardTreeItem: React.FC<{
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
-    boards, activeBoardId, onSelectBoard, onGoHome, isOpen, onToggle, 
+    boards, activeBoardId, onSelectBoard, onGoHome, onCreateBoard, isOpen, onToggle, 
     columnCount, onColumnChange, language, onToggleLanguage, showDatabaseNames,
-    effectsEnabled, onToggleEffects
+    effectsEnabled, onToggleEffects, rootPageId, onContentUploaded
 }) => {
   const strings = t(language);
   const [boardMarkers, setBoardMarkers] = useState<Record<string, string>>({});
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [showCV, setShowCV] = useState(false);
+  const [uploadMode, setUploadMode] = useState(false);
+  const [uploadTarget, setUploadTarget] = useState<Board | null>(null);
+  const [isAddingRoot, setIsAddingRoot] = useState(false);
+  const [newRootTitle, setNewRootTitle] = useState('');
+  const [isCreatingRoot, setIsCreatingRoot] = useState(false);
 
-  // URL del embed de Canva - formato correcto con ?embed
-  const CANVA_EMBED_URL = "https://www.canva.com/design/DAG7-GUGdHQ/7AIMi6rsRZATfrWpT7JRAQ/view?embed";
+  const submitNewRoot = async () => {
+    const title = newRootTitle.trim();
+    if (!title || isCreatingRoot) return;
+    setIsCreatingRoot(true);
+    try {
+      await onCreateBoard(rootPageId, title);
+      setNewRootTitle('');
+      setIsAddingRoot(false);
+    } finally {
+      setIsCreatingRoot(false);
+    }
+  };
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) document.documentElement.requestFullscreen();
@@ -245,7 +339,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         toggleFullscreen();
       } else if (key === 'c') {
         e.preventDefault();
-        setShowCV(prev => !prev);
+        setUploadMode(prev => !prev);
       } else if (key === 'v') {
         e.preventDefault();
         onGoHome();
@@ -298,7 +392,48 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
         <div className="flex-1 overflow-y-auto no-scrollbar py-4 px-2">
-          <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest px-3 mb-2 block">{strings.boards}</span>
+          <div className="flex items-center justify-between px-3 mb-2">
+            <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest">{strings.boards}</span>
+            {uploadMode && (
+              <button
+                onClick={() => setIsAddingRoot(v => !v)}
+                title="Nueva lista"
+                className="w-5 h-5 flex items-center justify-center rounded text-primary hover:bg-white/10 transition-all"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {isAddingRoot && (
+            <div className="flex items-center gap-1.5 mb-2 px-2">
+              <input
+                autoFocus
+                value={newRootTitle}
+                onChange={(e) => setNewRootTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') submitNewRoot();
+                  if (e.key === 'Escape') { setIsAddingRoot(false); setNewRootTitle(''); }
+                }}
+                placeholder="Nueva lista..."
+                className="flex-1 min-w-0 bg-black/40 border border-white/10 focus:border-primary/40 rounded-md px-2 py-1 text-[12px] text-white placeholder-gray-600 outline-none"
+              />
+              <button
+                onClick={submitNewRoot}
+                disabled={!newRootTitle.trim() || isCreatingRoot}
+                className="w-6 h-6 flex items-center justify-center rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-all disabled:opacity-30"
+              >
+                {isCreatingRoot ? <div className="loader scale-[0.18] origin-center" /> : <Check className="w-3.5 h-3.5" />}
+              </button>
+              <button
+                onClick={() => { setIsAddingRoot(false); setNewRootTitle(''); }}
+                className="w-6 h-6 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/10 transition-all"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {boards.filter(b => !b.parentId).map(b => (
             <BoardTreeItem 
                 key={b.id} 
@@ -311,6 +446,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onSetMarker={handleSetMarker} 
                 strings={strings}
                 showDatabaseNames={showDatabaseNames}
+                uploadMode={uploadMode}
+                onUpload={setUploadTarget}
+                onCreateBoard={onCreateBoard}
             />
           ))}
         </div>
@@ -346,11 +484,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
 
             <div className="relative group/tooltip">
-              <button onClick={() => setShowCV(true)} className={getActionBtnClass(showCV)}>
-                <UserRound className="w-4 h-4" />
+              <button onClick={() => setUploadMode(prev => !prev)} className={getActionBtnClass(uploadMode)}>
+                <Upload className="w-4 h-4" />
               </button>
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-surface border border-white/10 rounded-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none whitespace-nowrap flex items-center gap-1.5">
-                <span className="text-[10px] text-gray-400">CV</span>
+                <span className="text-[10px] text-gray-400">{uploadMode ? 'Subir On' : 'Subir Off'}</span>
                 <span className="text-[9px] text-primary font-bold bg-white/10 px-1.5 py-0.5 rounded">C</span>
               </div>
             </div>
@@ -368,46 +506,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Modal CV */}
-      <AnimatePresence>
-        {showCV && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4"
-            onClick={() => setShowCV(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="relative h-[90vh] bg-black rounded-2xl overflow-hidden shadow-2xl"
-              style={{ aspectRatio: '8.5/11' }} // Formato carta US Letter
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Header */}
-              <div className="absolute top-0 left-0 right-0 h-10 z-10 flex items-center gap-2 px-4">
-                <button 
-                  onClick={() => setShowCV(false)}
-                  className="w-4 h-4 rounded flex items-center justify-center transition-all text-primary hover:text-primary/70 text-xs"
-                >
-                  ✕
-                </button>
-                <span className="text-[10px] text-primary font-black uppercase tracking-[0.2em]">Curriculum Vitae</span>
-              </div>
-              
-              {/* Canva Embed */}
-              <iframe
-                src={CANVA_EMBED_URL}
-                className="w-full h-full border-0 bg-black"
-                allowFullScreen
-                allow="fullscreen"
-              />
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Panel de subida de archivos a Notion */}
+      {uploadTarget && (
+        <UploadPanel
+          boardId={uploadTarget.id}
+          boardTitle={uploadTarget.title.startsWith('*') ? uploadTarget.title.slice(1) : uploadTarget.title}
+          onClose={() => setUploadTarget(null)}
+          onUploaded={(boardId) => onContentUploaded(boardId)}
+        />
+      )}
     </>
   );
 };

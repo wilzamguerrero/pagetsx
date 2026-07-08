@@ -1,11 +1,8 @@
 import { NotionBlock, Board, MediaItem, NotionToggleBlock, NotionPageBlock, NotionDatabaseBlock, NotionProperty } from '../types';
 
-// Detectar entorno
-const IS_BROWSER = typeof window !== 'undefined';
-const IS_LOCALHOST = IS_BROWSER && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-
-// En localhost usar nuestro proxy local, en producción usar la API de Vercel
-const API_BASE = IS_LOCALHOST ? 'http://localhost:3001/api/notion' : '/api/notion';
+// Ruta del proxy de Notion (Cloudflare Pages Functions en producción,
+// proxy de Vite hacia `wrangler pages dev` en desarrollo).
+const API_BASE = '/api/notion';
 const NOTION_VERSION = '2022-06-28';
 
 // Variables de entorno (VITE_ prefix para el frontend)

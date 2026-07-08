@@ -8,9 +8,19 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+upz
 dist
 dist-ssr
 *.local
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Cloudflare / Wrangler
+.dev.vars
+.wrangler
 
 # Editor directories and files
 .vscode/*
