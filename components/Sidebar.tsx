@@ -383,7 +383,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const getActionBtnClass = (isActive: boolean) => `
-    w-11 h-11 sm:w-10 sm:h-10 bg-white/5 rounded-xl flex items-center justify-center 
+    w-9 h-9 sm:w-10 sm:h-10 shrink-0 bg-white/5 rounded-xl flex items-center justify-center 
     transition-all border border-white/5 
     ${isActive 
       ? 'text-primary border-primary/20 bg-primary/10' 
@@ -407,20 +407,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Panel a pantalla completa con fondo translúcido */}
       <div className={`fixed inset-2 sm:inset-4 z-40 flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-surface/50 backdrop-blur-md shadow-2xl transition-all duration-300 ${isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-[0.98] pointer-events-none'}`}>
         {/* Cabecera con acciones */}
-        <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-white/5">
-          <div className="flex items-center gap-2.5 min-w-0">
+        <div className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-white/5">
+          <div className="flex items-center gap-2.5 min-w-0 shrink">
             <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
               <Folder className="w-4 h-4 text-primary" />
             </div>
-            <div className="leading-none min-w-0">
-              <p className="text-[9px] text-gray-500 uppercase font-black tracking-[0.2em]">Portfolio</p>
-              <h2 className="text-sm sm:text-base font-bold text-white truncate mt-1">{strings.boards}</h2>
-            </div>
+            <h2 className="hidden sm:block text-base font-bold text-white truncate">{strings.boards}</h2>
           </div>
 
-          <div className="flex items-center gap-1.5 sm:gap-2">
+          <div className="flex items-center gap-1 sm:gap-2">
             <button onClick={onToggleLanguage} title={strings.language} className={getActionBtnClass(false)}>
-              <span className="text-[11px] font-black text-primary tracking-wider">{language.toUpperCase()}</span>
+              <span className="text-[10px] sm:text-[11px] font-black text-primary tracking-wider">{language.toUpperCase()}</span>
             </button>
             <button onClick={onToggleEffects} title={effectsEnabled ? 'FX On (F)' : 'FX Off (F)'} className={getActionBtnClass(effectsEnabled)}>
               <Sparkles className="w-4 h-4" />
@@ -434,8 +431,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button onClick={onGoHome} title="Inicio (V)" className={getActionBtnClass(activeBoardId === null)}>
               <Home className="w-4 h-4" />
             </button>
-            <div className="w-px h-7 bg-white/10 mx-0.5 sm:mx-1" />
-            <button onClick={onToggle} title="Cerrar (Z)" className="w-11 h-11 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 border border-white/5 transition-all">
+            <div className="w-px h-6 bg-white/10 mx-0.5 sm:mx-1 shrink-0" />
+            <button onClick={onToggle} title="Cerrar (Z)" className="w-9 h-9 sm:w-10 sm:h-10 shrink-0 rounded-xl flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 border border-white/5 transition-all">
               <X className="w-5 h-5" />
             </button>
           </div>
