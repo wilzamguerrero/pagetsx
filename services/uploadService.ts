@@ -1,6 +1,13 @@
-// Client-side upload engine. Ports the robust chunked-upload flow used by the
-// "upz" project so heavy files (up to 5 GB) can be sent to Notion through the
-// Cloudflare Pages Functions (/api/upload-*).
+// Client-side upload engine. Sube archivos pesados (hasta 5 GB) a Notion a
+// través de las Cloudflare Pages Functions (/api/upload-*).
+//
+// Estrategia de rendimiento:
+// - Un ÚNICO semáforo global limita el total de subidas simultáneas a Notion
+//   (chunks de archivos grandes + archivos pequeños comparten el mismo cupo).
+//   Así se mantiene el tubo lleno sin saturar Notion (que responde 503 y obliga
+//   a reintentos lentos cuando hay demasiadas peticiones a la vez).
+// - Trozos de 16 MiB: menos peticiones por archivo, menos latencia acumulada.
+// - Reintentos con backoff corto para no generar parones largos.
 
 export interface UploadRecord {
   name: string;
@@ -20,12 +27,68 @@ export interface UploadProgress {
 }
 
 type ProgressCb = (p: UploadProgress) => void;
+export type FileStatus = "pending" | "uploading" | "done";
 
-const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MiB — matches server-side chunk size
+// IMPORTANTE: CHUNK_SIZE debe coincidir con el de functions/api/upload-init.ts
+const CHUNK_SIZE = 16 * 1024 * 1024; // 16 MiB
 const SMALL_FILE_THRESHOLD = 20 * 1024 * 1024; // 20 MiB
 const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5 GB (Notion limit)
 
-// Extensions accepted by Notion's File Upload API (mirrors the server MIME map).
+// Total de subidas simultáneas a Notion (compartido por TODOS los archivos).
+const GLOBAL_CONCURRENCY = 6;
+// Cuántos archivos pueden estar "en curso" a la vez (adaptado al tamaño).
+const SMALL_FILE_POOL = 6;
+const LARGE_FILE_POOL = 3;
+
+const MAX_PART_RETRIES = 6;
+const MAX_SMALL_RETRIES = 4;
+
+/** Semáforo simple para limitar concurrencia. */
+class Semaphore {
+  private active = 0;
+  private queue: Array<() => void> = [];
+  constructor(private readonly max: number) {}
+
+  async acquire(): Promise<() => void> {
+    if (this.active < this.max) {
+      this.active++;
+      return () => this.release();
+    }
+    return new Promise<() => void>((resolve) => {
+      this.queue.push(() => {
+        this.active++;
+        resolve(() => this.release());
+      });
+    });
+  }
+
+  private release(): void {
+    this.active--;
+    const next = this.queue.shift();
+    if (next) next();
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Ejecuta una operación de red con reintentos y backoff corto. */
+async function withRetry<T>(fn: () => Promise<T>, retries: number): Promise<T> {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < retries) {
+        const backoff = Math.min(5000, 400 * Math.pow(2, attempt - 1));
+        await sleep(backoff + Math.random() * 300);
+      }
+    }
+  }
+  throw lastError || new Error("Operación fallida.");
+}
+
+// Extensiones aceptadas por Notion (mirror del mapa MIME del servidor).
 const NOTION_SUPPORTED_EXTENSIONS = new Set([
   "zip", "gz", "gzip", "tar", "7z", "bz2", "rar",
   "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "tif", "ico", "heic", "avif", "apng",
@@ -38,7 +101,7 @@ const NOTION_SUPPORTED_EXTENSIONS = new Set([
 
 const needsZipCompression = (filename: string): boolean => {
   const dotIndex = filename.lastIndexOf(".");
-  if (dotIndex === -1) return true; // no extension
+  if (dotIndex === -1) return true;
   const ext = filename.slice(dotIndex + 1).toLowerCase();
   return !NOTION_SUPPORTED_EXTENSIONS.has(ext);
 };
@@ -56,20 +119,18 @@ const compressFileToZip = async (file: File): Promise<File> => {
 };
 
 /**
- * Upload a single file to Notion.
- * - Unsupported extensions → compressed to a real ZIP first
- * - Files ≤ 20MB → single request to /api/upload-file
- * - Files > 20MB → chunked flow (init → parts → complete)
+ * Sube un solo archivo a Notion, usando el semáforo global para cada operación
+ * de red (así el cupo total es compartido entre todos los archivos del lote).
  */
 export const uploadOneFile = async (
   file: File,
   fileIndex: number,
   totalFiles: number,
+  sem: Semaphore,
   onProgress?: ProgressCb
 ): Promise<UploadRecord> => {
   const originalName = file.name;
   const label = `${originalName} (${fileIndex + 1}/${totalFiles})`;
-
   const report = (percent: number, step: string) =>
     onProgress?.({ fileName: originalName, fileIndex, totalFiles, percent, step });
 
@@ -77,7 +138,7 @@ export const uploadOneFile = async (
     throw new Error(`"${originalName}" excede el límite de 5 GB.`);
   }
 
-  // Compress unsupported file types to a real ZIP.
+  // Comprimir tipos no soportados a ZIP real.
   let uploadFile = file;
   let wasCompressed = false;
   if (needsZipCompression(file.name)) {
@@ -86,27 +147,32 @@ export const uploadOneFile = async (
     wasCompressed = true;
   }
 
-  // ── Archivo pequeño: una sola petición a /api/upload-file (rápido) ──
+  // ── Archivo pequeño: una sola petición a /api/upload-file ──
   if (uploadFile.size <= SMALL_FILE_THRESHOLD) {
     report(0, `Subiendo ${label}...`);
-
-    const fd = new FormData();
-    fd.append("file", uploadFile, uploadFile.name);
-
-    const res = await fetch("/api/upload-file", { method: "POST", body: fd });
-    const text = await res.text();
-    let data: any;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new Error(`Respuesta inesperada del servidor al subir "${originalName}".`);
-    }
-    if (!res.ok || !data.success) {
-      throw new Error(data.error || `Error al subir "${originalName}"`);
-    }
+    const data = await withRetry(async () => {
+      const release = await sem.acquire();
+      try {
+        const fd = new FormData();
+        fd.append("file", uploadFile, uploadFile.name);
+        const res = await fetch("/api/upload-file", { method: "POST", body: fd });
+        const text = await res.text();
+        let parsed: any;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          throw new Error(`Respuesta inesperada al subir "${originalName}".`);
+        }
+        if (!res.ok || !parsed.success) {
+          throw new Error(parsed.error || `Error al subir "${originalName}"`);
+        }
+        return parsed;
+      } finally {
+        release();
+      }
+    }, MAX_SMALL_RETRIES);
 
     report(100, `Subido ${label}`);
-
     return {
       name: originalName,
       finalName: data.finalName as string,
@@ -117,9 +183,8 @@ export const uploadOneFile = async (
     };
   }
 
-  // ── Large file: chunked flow ──
+  // ── Archivo grande: multi-part ──
   const numberOfParts = Math.ceil(uploadFile.size / CHUNK_SIZE);
-
   report(0, `Inicializando ${label} (${numberOfParts} partes)...`);
 
   const initRes = await fetch("/api/upload-init", {
@@ -137,27 +202,21 @@ export const uploadOneFile = async (
   }
 
   const { id: uploadId, uploadName, contentType, mode } = initData;
-
-  const MAX_PART_RETRIES = 6;
-  const PART_CONCURRENCY = 3;
   let completedParts = 0;
 
-  const uploadPart = async (partNumber: number): Promise<void> => {
-    const start = (partNumber - 1) * CHUNK_SIZE;
-    const end = Math.min(start + CHUNK_SIZE, uploadFile.size);
-    const chunk = uploadFile.slice(start, end);
-
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= MAX_PART_RETRIES; attempt++) {
-      const chunkBlob = new Blob([chunk], { type: contentType || "application/octet-stream" });
-      const chunkFd = new FormData();
-      if (mode === "multi_part") {
-        chunkFd.append("part_number", String(partNumber));
-      }
-      chunkFd.append("file", chunkBlob, uploadName);
-
+  const uploadPart = (partNumber: number): Promise<void> =>
+    withRetry(async () => {
+      const release = await sem.acquire();
       try {
+        const start = (partNumber - 1) * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, uploadFile.size);
+        const chunk = uploadFile.slice(start, end);
+
+        const chunkBlob = new Blob([chunk], { type: contentType || "application/octet-stream" });
+        const chunkFd = new FormData();
+        if (mode === "multi_part") chunkFd.append("part_number", String(partNumber));
+        chunkFd.append("file", chunkBlob, uploadName);
+
         const partRes = await fetch(`/api/upload-part?upload_id=${encodeURIComponent(uploadId)}`, {
           method: "POST",
           body: chunkFd,
@@ -176,39 +235,17 @@ export const uploadOneFile = async (
         completedParts++;
         const pct = Math.min(98, Math.round((completedParts / numberOfParts) * 100));
         report(pct, `Subiendo ${label} — ${completedParts}/${numberOfParts} partes (${pct}%)`);
-        return;
-      } catch (err: any) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        if (attempt < MAX_PART_RETRIES) {
-          const backoff = Math.min(16000, 1000 * Math.pow(2, attempt - 1));
-          await new Promise((r) => setTimeout(r, backoff + Math.random() * 500));
-        }
+      } finally {
+        release();
       }
-    }
-
-    throw new Error(
-      `Error en parte ${partNumber} de "${originalName}" tras ${MAX_PART_RETRIES} intentos: ${
-        lastError?.message || "Error de red"
-      }`
-    );
-  };
+    }, MAX_PART_RETRIES);
 
   report(0, `Subiendo ${label} — 0/${numberOfParts} partes (0%)`);
 
-  let nextPart = 1;
-  const runWorker = async (): Promise<void> => {
-    while (true) {
-      const partNumber = nextPart++;
-      if (partNumber > numberOfParts) return;
-      await uploadPart(partNumber);
-    }
-  };
-
-  const workers = Array.from(
-    { length: Math.min(PART_CONCURRENCY, numberOfParts) },
-    () => runWorker()
+  // Lanza todas las partes: cada una compite por un hueco del semáforo global.
+  await Promise.all(
+    Array.from({ length: numberOfParts }, (_, i) => uploadPart(i + 1))
   );
-  await Promise.all(workers);
 
   if (mode === "multi_part") {
     report(99, `Finalizando ${label}...`);
@@ -224,7 +261,6 @@ export const uploadOneFile = async (
   }
 
   report(100, `Subido ${label}`);
-
   return {
     name: originalName,
     finalName: uploadName,
@@ -235,37 +271,8 @@ export const uploadOneFile = async (
   };
 };
 
-export type FileStatus = "pending" | "uploading" | "done";
-
-// Cuántos archivos se suben a la vez. Varios archivos pequeños en paralelo
-// aceleran mucho la subida frente a hacerlos de uno en uno.
-const FILE_CONCURRENCY = 4;
-const FILE_RETRIES = 3;
-
-const uploadOneFileWithRetry = async (
-  file: File,
-  index: number,
-  total: number,
-  onProgress?: ProgressCb
-): Promise<UploadRecord> => {
-  let lastError: Error | null = null;
-  for (let attempt = 1; attempt <= FILE_RETRIES; attempt++) {
-    try {
-      return await uploadOneFile(file, index, total, onProgress);
-    } catch (err: any) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      if (attempt < FILE_RETRIES) {
-        const backoff = Math.min(8000, 800 * Math.pow(2, attempt - 1));
-        await new Promise((r) => setTimeout(r, backoff + Math.random() * 400));
-      }
-    }
-  }
-  throw lastError || new Error(`No se pudo subir "${file.name}".`);
-};
-
 /**
- * Sube todos los archivos (en paralelo, con reintentos) y luego los adjunta
- * como bloques dentro del toggle destino.
+ * Sube todos los archivos y luego los adjunta como bloques dentro del toggle.
  */
 export const uploadFilesToBoard = async (
   boardId: string,
@@ -274,6 +281,12 @@ export const uploadFilesToBoard = async (
   onStep?: (step: string) => void
 ): Promise<{ count: number }> => {
   const records: UploadRecord[] = new Array(files.length);
+  const sem = new Semaphore(GLOBAL_CONCURRENCY);
+
+  // Pool de archivos adaptado: pocos archivos grandes a la vez (para que cada
+  // uno acapare más huecos y termine antes) o muchos pequeños en paralelo.
+  const hasLarge = files.some((f) => f.size > SMALL_FILE_THRESHOLD);
+  const filePool = Math.min(hasLarge ? LARGE_FILE_POOL : SMALL_FILE_POOL, files.length);
 
   let next = 0;
   const worker = async (): Promise<void> => {
@@ -281,16 +294,12 @@ export const uploadFilesToBoard = async (
       const i = next++;
       if (i >= files.length) return;
       onFileStatus?.(i, "uploading");
-      records[i] = await uploadOneFileWithRetry(files[i], i, files.length, (p) =>
-        onStep?.(p.step)
-      );
+      records[i] = await uploadOneFile(files[i], i, files.length, sem, (p) => onStep?.(p.step));
       onFileStatus?.(i, "done");
     }
   };
 
-  await Promise.all(
-    Array.from({ length: Math.min(FILE_CONCURRENCY, files.length) }, () => worker())
-  );
+  await Promise.all(Array.from({ length: filePool }, () => worker()));
 
   onStep?.("Adjuntando a Notion...");
 

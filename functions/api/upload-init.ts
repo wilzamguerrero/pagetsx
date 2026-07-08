@@ -25,7 +25,9 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     return json({ error: "Se requiere el nombre del archivo." }, 400);
   }
 
-  const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MiB
+  // IMPORTANTE: CHUNK_SIZE debe coincidir con el del cliente (uploadService.ts),
+  // porque number_of_parts se calcula aquí y el cliente envía las partes.
+  const CHUNK_SIZE = 16 * 1024 * 1024; // 16 MiB (bajo el límite de 20 MB de Notion)
   const MULTI_PART_THRESHOLD = 20 * 1024 * 1024; // 20 MiB
   const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5 GB (Notion paid workspace limit)
 
