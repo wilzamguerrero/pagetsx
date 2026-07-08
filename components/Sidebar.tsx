@@ -4,7 +4,7 @@ import { Board, Language } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
     Folder, FileText, Database, ChevronRight, ChevronDown, ChevronLeft, 
-    Maximize, Minimize, Circle, Home, Sparkles, Upload, Plus, Check, X
+    Maximize, Minimize, Circle, Home, Sparkles, Upload, Plus, Check, X, Search
 } from 'lucide-react';
 import { t } from '../services/i18nService';
 import { UploadPanel } from './UploadPanel';
@@ -303,6 +303,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [isAddingRoot, setIsAddingRoot] = useState(false);
   const [newRootTitle, setNewRootTitle] = useState('');
   const [isCreatingRoot, setIsCreatingRoot] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Búsqueda de tableros (sin distinguir mayúsculas ni acentos)
+  const normalizeText = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const query = searchQuery.trim();
+  const nq = normalizeText(query);
+  const searchResults = query
+    ? boards.filter(b => {
+        if (!showDatabaseNames && b.type === 'database' && !b.title.startsWith('*')) return false;
+        const title = b.title.startsWith('*') ? b.title.slice(1) : b.title;
+        return normalizeText(title).includes(nq);
+      })
+    : [];
+
+  const getSimpleIcon = (b: Board) => {
+    if (b.type === 'database') return <Database className="w-3.5 h-3.5 shrink-0" />;
+    if (b.type === 'page') return <FileText className="w-3.5 h-3.5 shrink-0" />;
+    return <Folder className="w-3.5 h-3.5 shrink-0" />;
+  };
 
   const submitNewRoot = async () => {
     const title = newRootTitle.trim();
@@ -391,10 +410,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
             ))}
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto no-scrollbar py-4 px-2">
+        {/* Buscador de tableros */}
+        <div className="px-3 pt-3 pb-1">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-gray-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar tablero..."
+              className="w-full bg-black/40 border border-white/10 focus:border-primary/40 rounded-lg pl-8 pr-7 py-1.5 text-[12px] text-white placeholder-gray-600 outline-none transition-colors"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded text-gray-500 hover:text-white"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto no-scrollbar py-2 px-2">
           <div className="flex items-center justify-between px-3 mb-2">
-            <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest">{strings.boards}</span>
-            {uploadMode && (
+            <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest">
+              {query ? `Resultados (${searchResults.length})` : strings.boards}
+            </span>
+            {uploadMode && !query && (
               <button
                 onClick={() => setIsAddingRoot(v => !v)}
                 title="Nueva lista"
@@ -434,23 +476,63 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           )}
 
-          {boards.filter(b => !b.parentId).map(b => (
-            <BoardTreeItem 
-                key={b.id} 
-                board={b} 
-                allBoards={boards} 
-                activeBoardId={activeBoardId} 
-                onSelect={onSelectBoard} 
-                depth={0} 
-                boardMarkers={boardMarkers} 
-                onSetMarker={handleSetMarker} 
-                strings={strings}
-                showDatabaseNames={showDatabaseNames}
-                uploadMode={uploadMode}
-                onUpload={setUploadTarget}
-                onCreateBoard={onCreateBoard}
-            />
-          ))}
+          {query ? (
+            searchResults.length > 0 ? (
+              searchResults.map(b => {
+                const parent = b.parentId ? boards.find(x => x.id === b.parentId) : undefined;
+                const parentTitle = parent ? (parent.title.startsWith('*') ? parent.title.slice(1) : parent.title) : '';
+                const title = b.title.startsWith('*') ? b.title.slice(1) : b.title;
+                const canManage = b.type === 'toggle' || b.type === 'page';
+                const isActive = activeBoardId === b.id;
+                return (
+                  <div
+                    key={b.id}
+                    onClick={() => onSelectBoard(b.id)}
+                    className={`group flex items-center justify-between p-1.5 my-0.5 rounded-lg cursor-pointer transition-all ${isActive ? 'bg-primary/20 text-primary' : 'text-gray-400 hover:bg-white/5 hover:text-white'}`}
+                  >
+                    <div className="flex items-center gap-1.5 overflow-hidden flex-1">
+                      {getSimpleIcon(b)}
+                      <div className="min-w-0 flex flex-col leading-none">
+                        <span className="text-[13px] font-medium truncate">{title}</span>
+                        {parentTitle && (
+                          <span className="text-[10px] text-gray-600 truncate mt-0.5">{parentTitle}</span>
+                        )}
+                      </div>
+                    </div>
+                    {uploadMode && canManage && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setUploadTarget(b); }}
+                        title="Subir archivos aquí"
+                        className="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-primary hover:bg-white/10 transition-all shrink-0"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })
+            ) : (
+              <p className="text-center text-[11px] text-gray-600 py-6 px-3">Sin resultados para "{query}"</p>
+            )
+          ) : (
+            boards.filter(b => !b.parentId).map(b => (
+              <BoardTreeItem 
+                  key={b.id} 
+                  board={b} 
+                  allBoards={boards} 
+                  activeBoardId={activeBoardId} 
+                  onSelect={onSelectBoard} 
+                  depth={0} 
+                  boardMarkers={boardMarkers} 
+                  onSetMarker={handleSetMarker} 
+                  strings={strings}
+                  showDatabaseNames={showDatabaseNames}
+                  uploadMode={uploadMode}
+                  onUpload={setUploadTarget}
+                  onCreateBoard={onCreateBoard}
+              />
+            ))
+          )}
         </div>
         <div className="p-3 border-t border-white/5 bg-black/20">
           <div className="flex flex-wrap justify-center items-center gap-2">
