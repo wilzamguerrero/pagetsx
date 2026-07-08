@@ -26,6 +26,8 @@ interface SidebarProps {
   onToggleEffects: () => void;
   rootPageId: string;
   onContentUploaded: (boardId: string) => void;
+  onEnsureAllLoaded: () => void;
+  isIndexing: boolean;
 }
 
 const MARKER_COLORS = [
@@ -293,7 +295,8 @@ const BoardTreeItem: React.FC<{
 export const Sidebar: React.FC<SidebarProps> = ({ 
     boards, activeBoardId, onSelectBoard, onGoHome, onCreateBoard, isOpen, onToggle, 
     columnCount, onColumnChange, language, onToggleLanguage, showDatabaseNames,
-    effectsEnabled, onToggleEffects, rootPageId, onContentUploaded
+    effectsEnabled, onToggleEffects, rootPageId, onContentUploaded,
+    onEnsureAllLoaded, isIndexing
 }) => {
   const strings = t(language);
   const [boardMarkers, setBoardMarkers] = useState<Record<string, string>>({});
@@ -380,69 +383,109 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const getActionBtnClass = (isActive: boolean) => `
-    w-9 h-9 bg-white/5 rounded-lg flex items-center justify-center 
+    w-11 h-11 sm:w-10 sm:h-10 bg-white/5 rounded-xl flex items-center justify-center 
     transition-all border border-white/5 
     ${isActive 
-      ? 'text-primary border-primary/20 bg-primary/5' 
-      : 'text-gray-500 hover:text-primary hover:border-primary/10 hover:bg-white/10'
+      ? 'text-primary border-primary/20 bg-primary/10' 
+      : 'text-gray-400 hover:text-primary hover:border-primary/10 hover:bg-white/10'
     }
   `;
 
   return (
     <>
-      <div className={`fixed top-10 z-50 group/sidebar-toggle transition-all ${isOpen ? 'left-[17rem]' : 'left-0'}`}>
-        <button onClick={onToggle} className="w-6 h-12 bg-surface border-y border-r border-white/5 rounded-r-xl shadow-lg transition-all text-primary">
-          {isOpen ? <ChevronLeft className="w-4 h-4 mx-auto" /> : <div className="w-1 h-4 bg-primary mx-auto rounded-full" />}
+      {/* Botón para abrir el panel (visible cuando está cerrado) */}
+      <div className={`fixed top-10 left-0 z-50 group/sidebar-toggle transition-all ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+        <button onClick={onToggle} className="w-6 h-12 bg-surface border-y border-r border-white/5 rounded-r-xl shadow-lg transition-all text-primary flex items-center justify-center">
+          <div className="w-1 h-4 bg-primary rounded-full" />
         </button>
         <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 bg-surface border border-white/10 rounded-lg opacity-0 group-hover/sidebar-toggle:opacity-100 transition-opacity pointer-events-none whitespace-nowrap flex items-center gap-1.5">
           <span className="text-[10px] text-gray-400">Menu</span>
           <span className="text-[9px] text-primary font-bold bg-white/10 px-1.5 py-0.5 rounded">Z</span>
         </div>
       </div>
-      <div className={`fixed top-4 bottom-4 w-64 bg-surface border border-white/5 flex flex-col z-40 transition-transform shadow-2xl rounded-2xl left-4 ${isOpen ? 'translate-x-0' : '-translate-x-[120%]'}`}>
-        <div className="p-4 border-b border-white/5 flex flex-col gap-3">
-          <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest px-1">{strings.columns}</span>
-          <div className="flex gap-2 justify-center">
-            {[1,2,3,4,5,6].map(n => (
-              <button key={n} onClick={() => onColumnChange(n)} className={`w-7 h-7 flex items-center justify-center rounded-lg text-[10px] font-bold transition-all ${columnCount === n ? 'bg-primary text-black shadow-lg scale-110' : 'bg-white/5 text-gray-500 hover:text-white'}`}>
-                {n}
-              </button>
-            ))}
+
+      {/* Panel a pantalla completa con fondo translúcido */}
+      <div className={`fixed inset-2 sm:inset-4 z-40 flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-surface/50 backdrop-blur-md shadow-2xl transition-all duration-300 ${isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-[0.98] pointer-events-none'}`}>
+        {/* Cabecera con acciones */}
+        <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-white/5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+              <Folder className="w-4 h-4 text-primary" />
+            </div>
+            <div className="leading-none min-w-0">
+              <p className="text-[9px] text-gray-500 uppercase font-black tracking-[0.2em]">Portfolio</p>
+              <h2 className="text-sm sm:text-base font-bold text-white truncate mt-1">{strings.boards}</h2>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <button onClick={onToggleLanguage} title={strings.language} className={getActionBtnClass(false)}>
+              <span className="text-[11px] font-black text-primary tracking-wider">{language.toUpperCase()}</span>
+            </button>
+            <button onClick={onToggleEffects} title={effectsEnabled ? 'FX On (F)' : 'FX Off (F)'} className={getActionBtnClass(effectsEnabled)}>
+              <Sparkles className="w-4 h-4" />
+            </button>
+            <button onClick={toggleFullscreen} title="Pantalla completa (X)" className={getActionBtnClass(isFullscreen)}>
+              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+            </button>
+            <button onClick={() => setUploadMode(prev => !prev)} title={uploadMode ? 'Modo subir: On (C)' : 'Modo subir: Off (C)'} className={getActionBtnClass(uploadMode)}>
+              <Upload className="w-4 h-4" />
+            </button>
+            <button onClick={onGoHome} title="Inicio (V)" className={getActionBtnClass(activeBoardId === null)}>
+              <Home className="w-4 h-4" />
+            </button>
+            <div className="w-px h-7 bg-white/10 mx-0.5 sm:mx-1" />
+            <button onClick={onToggle} title="Cerrar (Z)" className="w-11 h-11 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 border border-white/5 transition-all">
+              <X className="w-5 h-5" />
+            </button>
           </div>
         </div>
-        {/* Buscador de tableros */}
-        <div className="px-3 pt-3 pb-1">
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 text-gray-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+
+        {/* Barra de herramientas: columnas + buscador */}
+        <div className="flex flex-col md:flex-row md:items-center gap-3 px-4 sm:px-6 py-3 border-b border-white/5">
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest">{strings.columns}</span>
+            <div className="flex gap-1.5">
+              {[1,2,3,4,5,6].map(n => (
+                <button key={n} onClick={() => onColumnChange(n)} className={`w-8 h-8 flex items-center justify-center rounded-lg text-[11px] font-bold transition-all ${columnCount === n ? 'bg-primary text-black shadow-lg scale-105' : 'bg-white/5 text-gray-500 hover:text-white'}`}>
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="relative flex-1 md:max-w-sm md:ml-auto">
+            <Search className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={onEnsureAllLoaded}
+              onChange={(e) => { setSearchQuery(e.target.value); onEnsureAllLoaded(); }}
               placeholder="Buscar tablero..."
-              className="w-full bg-black/40 border border-white/10 focus:border-primary/40 rounded-lg pl-8 pr-7 py-1.5 text-[12px] text-white placeholder-gray-600 outline-none transition-colors"
+              className="w-full bg-black/40 border border-white/10 focus:border-primary/40 rounded-xl pl-9 pr-8 py-2 text-[13px] text-white placeholder-gray-600 outline-none transition-colors"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded text-gray-500 hover:text-white"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-white"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-4 h-4" />
               </button>
             )}
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto no-scrollbar py-2 px-2">
-          <div className="flex items-center justify-between px-3 mb-2">
-            <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest">
+        {/* Contenido */}
+        <div className="flex-1 overflow-y-auto no-scrollbar p-4 sm:p-6">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest flex items-center gap-1.5">
               {query ? `Resultados (${searchResults.length})` : strings.boards}
+              {isIndexing && <span className="loader scale-[0.16] origin-center -my-2" />}
             </span>
             {uploadMode && !query && (
               <button
                 onClick={() => setIsAddingRoot(v => !v)}
-                title="Nueva lista"
-                className="w-5 h-5 flex items-center justify-center rounded text-primary hover:bg-white/10 transition-all"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-primary bg-primary/10 border border-primary/20 hover:bg-primary/20 transition-all"
               >
-                <Plus className="w-3.5 h-3.5" />
+                <Plus className="w-3.5 h-3.5" /> Nueva lista
               </button>
             )}
           </div>
@@ -478,113 +521,68 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {query ? (
             searchResults.length > 0 ? (
-              searchResults.map(b => {
-                const parent = b.parentId ? boards.find(x => x.id === b.parentId) : undefined;
-                const parentTitle = parent ? (parent.title.startsWith('*') ? parent.title.slice(1) : parent.title) : '';
-                const title = b.title.startsWith('*') ? b.title.slice(1) : b.title;
-                const canManage = b.type === 'toggle' || b.type === 'page';
-                const isActive = activeBoardId === b.id;
-                return (
-                  <div
-                    key={b.id}
-                    onClick={() => onSelectBoard(b.id)}
-                    className={`group flex items-center justify-between p-1.5 my-0.5 rounded-lg cursor-pointer transition-all ${isActive ? 'bg-primary/20 text-primary' : 'text-gray-400 hover:bg-white/5 hover:text-white'}`}
-                  >
-                    <div className="flex items-center gap-1.5 overflow-hidden flex-1">
-                      {getSimpleIcon(b)}
-                      <div className="min-w-0 flex flex-col leading-none">
-                        <span className="text-[13px] font-medium truncate">{title}</span>
-                        {parentTitle && (
-                          <span className="text-[10px] text-gray-600 truncate mt-0.5">{parentTitle}</span>
-                        )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-2">
+                {searchResults.map(b => {
+                  const parent = b.parentId ? boards.find(x => x.id === b.parentId) : undefined;
+                  const parentTitle = parent ? (parent.title.startsWith('*') ? parent.title.slice(1) : parent.title) : '';
+                  const title = b.title.startsWith('*') ? b.title.slice(1) : b.title;
+                  const canManage = b.type === 'toggle' || b.type === 'page';
+                  const isActive = activeBoardId === b.id;
+                  return (
+                    <div
+                      key={b.id}
+                      onClick={() => onSelectBoard(b.id)}
+                      className={`group flex items-center justify-between p-2.5 rounded-xl cursor-pointer border transition-all ${isActive ? 'bg-primary/20 text-primary border-primary/20' : 'text-gray-400 border-white/5 bg-white/[0.02] hover:bg-white/5 hover:text-white'}`}
+                    >
+                      <div className="flex items-center gap-2 overflow-hidden flex-1">
+                        {getSimpleIcon(b)}
+                        <div className="min-w-0 flex flex-col leading-none">
+                          <span className="text-[13px] font-medium truncate">{title}</span>
+                          {parentTitle && (
+                            <span className="text-[10px] text-gray-600 truncate mt-1">{parentTitle}</span>
+                          )}
+                        </div>
                       </div>
+                      {uploadMode && canManage && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setUploadTarget(b); }}
+                          title="Subir archivos aquí"
+                          className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-500 hover:text-primary hover:bg-white/10 transition-all shrink-0"
+                        >
+                          <Upload className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
-                    {uploadMode && canManage && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setUploadTarget(b); }}
-                        title="Subir archivos aquí"
-                        className="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-primary hover:bg-white/10 transition-all shrink-0"
-                      >
-                        <Upload className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                );
-              })
+                  );
+                })}
+              </div>
             ) : (
-              <p className="text-center text-[11px] text-gray-600 py-6 px-3">Sin resultados para "{query}"</p>
+              <p className="text-center text-[11px] text-gray-600 py-10">
+                {isIndexing ? 'Indexando todas las listas...' : `Sin resultados para "${query}"`}
+              </p>
             )
           ) : (
-            boards.filter(b => !b.parentId).map(b => (
-              <BoardTreeItem 
-                  key={b.id} 
-                  board={b} 
-                  allBoards={boards} 
-                  activeBoardId={activeBoardId} 
-                  onSelect={onSelectBoard} 
-                  depth={0} 
-                  boardMarkers={boardMarkers} 
-                  onSetMarker={handleSetMarker} 
-                  strings={strings}
-                  showDatabaseNames={showDatabaseNames}
-                  uploadMode={uploadMode}
-                  onUpload={setUploadTarget}
-                  onCreateBoard={onCreateBoard}
-              />
-            ))
+            <div className="columns-1 sm:columns-2 lg:columns-3 2xl:columns-4 gap-x-6 [column-fill:balance]">
+              {boards.filter(b => !b.parentId).map(b => (
+                <div key={b.id} className="break-inside-avoid mb-1">
+                  <BoardTreeItem 
+                      board={b} 
+                      allBoards={boards} 
+                      activeBoardId={activeBoardId} 
+                      onSelect={onSelectBoard} 
+                      depth={0} 
+                      boardMarkers={boardMarkers} 
+                      onSetMarker={handleSetMarker} 
+                      strings={strings}
+                      showDatabaseNames={showDatabaseNames}
+                      uploadMode={uploadMode}
+                      onUpload={setUploadTarget}
+                      onCreateBoard={onCreateBoard}
+                  />
+                </div>
+              ))}
+            </div>
           )}
-        </div>
-        <div className="p-3 border-t border-white/5 bg-black/20">
-          <div className="flex flex-wrap justify-center items-center gap-2">
-            <div className="relative group/tooltip">
-              <button onClick={onToggleLanguage} className="w-9 h-9 bg-white/5 rounded-lg flex items-center justify-center hover:bg-white/10 transition-all group border border-white/5">
-                <span className="text-[10px] font-black text-primary tracking-wider group-hover:scale-110">{language.toUpperCase()}</span>
-              </button>
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-surface border border-white/10 rounded-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none whitespace-nowrap flex items-center gap-1.5">
-                <span className="text-[10px] text-gray-400">{strings.language}</span>
-              </div>
-            </div>
-
-            <div className="relative group/tooltip">
-              <button onClick={onToggleEffects} className={getActionBtnClass(effectsEnabled)}>
-                <Sparkles className="w-4 h-4" />
-              </button>
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-surface border border-white/10 rounded-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none whitespace-nowrap flex items-center gap-1.5">
-                <span className="text-[10px] text-gray-400">{effectsEnabled ? 'FX On' : 'FX Off'}</span>
-                <span className="text-[9px] text-primary font-bold bg-white/10 px-1.5 py-0.5 rounded">F</span>
-              </div>
-            </div>
-
-            <div className="relative group/tooltip">
-              <button onClick={toggleFullscreen} className={getActionBtnClass(isFullscreen)}>
-                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-              </button>
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-surface border border-white/10 rounded-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none whitespace-nowrap flex items-center gap-1.5">
-                <span className="text-[10px] text-gray-400">Fullscreen</span>
-                <span className="text-[9px] text-primary font-bold bg-white/10 px-1.5 py-0.5 rounded">X</span>
-              </div>
-            </div>
-
-            <div className="relative group/tooltip">
-              <button onClick={() => setUploadMode(prev => !prev)} className={getActionBtnClass(uploadMode)}>
-                <Upload className="w-4 h-4" />
-              </button>
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-surface border border-white/10 rounded-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none whitespace-nowrap flex items-center gap-1.5">
-                <span className="text-[10px] text-gray-400">{uploadMode ? 'Subir On' : 'Subir Off'}</span>
-                <span className="text-[9px] text-primary font-bold bg-white/10 px-1.5 py-0.5 rounded">C</span>
-              </div>
-            </div>
-
-            <div className="relative group/tooltip">
-              <button onClick={onGoHome} className={getActionBtnClass(activeBoardId === null)}>
-                <Home className="w-4 h-4" />
-              </button>
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-surface border border-white/10 rounded-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none whitespace-nowrap flex items-center gap-1.5">
-                <span className="text-[10px] text-gray-400">Home</span>
-                <span className="text-[9px] text-primary font-bold bg-white/10 px-1.5 py-0.5 rounded">V</span>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
 

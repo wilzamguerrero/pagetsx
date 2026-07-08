@@ -31,8 +31,70 @@ const App: React.FC = () => {
   const [columnCount, setColumnCount] = useState(isMobile ? 1 : 4);
   const [effectsEnabled, setEffectsEnabled] = useState(false);
   const notionServiceRef = useRef<NotionService | null>(null);
+  const allLoadedRef = useRef(false);
+  const indexingRef = useRef(false);
+  const [isIndexing, setIsIndexing] = useState(false);
   
   const strings = t(state.language);
+
+  // Carga TODO el árbol de tableros (recursivamente) para poder buscar entre
+  // todas las listas, incluidas las que nunca se han desplegado. Se ejecuta una
+  // sola vez, bajo demanda (al abrir el buscador), para no ralentizar el arranque.
+  const loadAllBoards = useCallback(async () => {
+    if (allLoadedRef.current || indexingRef.current || !notionServiceRef.current) return;
+    indexingRef.current = true;
+    setIsIndexing(true);
+    const service = notionServiceRef.current;
+    try {
+      const known = new Map<string, Board>();
+      state.boards.forEach(b => known.set(b.id, { ...b }));
+      let queue = Array.from(known.values()).filter(b => b.hasChildren && !b.isLoaded);
+      const CONCURRENCY = 5;
+
+      while (queue.length) {
+        const batch = queue.splice(0, CONCURRENCY);
+        const results = await Promise.all(batch.map(async (b) => {
+          try {
+            let subs: Board[];
+            if (b.type === 'database') {
+              subs = await service.queryDatabase(b.id, false);
+            } else {
+              const blocks = await service.getBlockChildren(b.id, false);
+              const deep = await service.getDeepBlockChildren(blocks, false);
+              subs = service.extractBoards(deep, b.id);
+            }
+            return { id: b.id, subs };
+          } catch {
+            return { id: b.id, subs: [] as Board[] };
+          }
+        }));
+
+        for (const r of results) {
+          const bb = known.get(r.id);
+          if (bb) bb.isLoaded = true;
+          for (const sub of r.subs) {
+            if (!known.has(sub.id)) {
+              known.set(sub.id, sub);
+              if (sub.hasChildren) queue.push(sub);
+            }
+          }
+        }
+      }
+
+      setState(prev => {
+        const map = new Map(prev.boards.map(b => [b.id, b]));
+        known.forEach((b, id) => {
+          if (map.has(id)) map.set(id, { ...map.get(id)!, isLoaded: true });
+          else map.set(id, b);
+        });
+        return { ...prev, boards: Array.from(map.values()) };
+      });
+      allLoadedRef.current = true;
+    } finally {
+      indexingRef.current = false;
+      setIsIndexing(false);
+    }
+  }, [state.boards]);
 
   // Actualizar URL sin recargar la página
   const updateUrl = useCallback((boardId: string | null) => {
@@ -323,7 +385,7 @@ const App: React.FC = () => {
       {/* Glitch overlay with chromatic aberration - only when effects enabled */}
       <GlitchOverlay isActive={isSidebarOpen && effectsEnabled} />
       {isSidebarOpen && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-30 transition-opacity" onClick={() => setIsSidebarOpen(false)} />
+        <div className="fixed inset-0 bg-black/10 z-30 transition-opacity" onClick={() => setIsSidebarOpen(false)} />
       )}
       <Sidebar
         boards={state.boards}
@@ -349,6 +411,8 @@ const App: React.FC = () => {
         effectsEnabled={effectsEnabled}
         onToggleEffects={() => setEffectsEnabled(prev => !prev)}
         rootPageId={state.rootPageId}
+        onEnsureAllLoaded={loadAllBoards}
+        isIndexing={isIndexing}
         onContentUploaded={(boardId) => {
           // Si estamos viendo ese tablero, refrescar para mostrar los archivos nuevos
           if (state.activeBoardId === boardId) {
@@ -356,7 +420,7 @@ const App: React.FC = () => {
           }
         }}
       />
-      <main className={`flex-1 transition-all duration-500 flex flex-col min-w-0 ${isSidebarOpen ? `lg:blur-none blur-sm ${effectsEnabled ? 'glitch-active' : ''}` : ''}`}>
+      <main className={`flex-1 transition-all duration-500 flex flex-col min-w-0 ${isSidebarOpen && effectsEnabled ? 'glitch-active' : ''}`}>
         {state.error && (
             <div className="mx-auto mt-10 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 max-w-2xl text-center">
                 <p className="font-bold">{strings.errorTitle}</p>
