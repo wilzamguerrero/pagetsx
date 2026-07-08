@@ -92,7 +92,8 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
 
   const totalSize = files.reduce((acc, f) => acc + f.size, 0);
   const doneCount = Object.values(statuses).filter(s => s === 'done').length;
-  const overallPercent = files.length ? Math.round((doneCount / files.length) * 100) : 0;
+  const uploadedBytes = files.reduce((acc, f, i) => acc + (statuses[i] === 'done' ? f.size : 0), 0);
+  const bytePercent = totalSize ? Math.round((uploadedBytes / totalSize) * 100) : 0;
 
   return (
     <AnimatePresence>
@@ -111,7 +112,7 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
-          <div className="flex items-center justify-between px-5 py-4 border-b border-white/5">
+          <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-white/5">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
                 <Upload className="w-4 h-4 text-primary" />
@@ -121,13 +122,30 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
                 <p className="text-sm text-white font-semibold truncate leading-tight mt-0.5">{boardTitle}</p>
               </div>
             </div>
-            <button
-              onClick={() => !isUploading && onClose()}
-              disabled={isUploading}
-              className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/10 transition-all disabled:opacity-30"
-            >
-              <X className="w-4 h-4" />
-            </button>
+
+            <div className="flex items-center gap-3 shrink-0">
+              {/* Tamaño total a subir */}
+              {files.length > 0 && (
+                <div className="text-right leading-none">
+                  <p className="text-[9px] text-gray-500 uppercase font-black tracking-widest">Tamaño</p>
+                  <p className="text-xs text-white font-mono mt-1">{formatSize(totalSize)}</p>
+                </div>
+              )}
+              {/* Porcentaje ya subido */}
+              {(isUploading || done) && (
+                <div className="text-right leading-none border-l border-white/10 pl-3">
+                  <p className="text-[9px] text-gray-500 uppercase font-black tracking-widest">Subido</p>
+                  <p className="text-xs text-primary font-mono font-bold mt-1">{done ? 100 : bytePercent}%</p>
+                </div>
+              )}
+              <button
+                onClick={() => !isUploading && onClose()}
+                disabled={isUploading}
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/10 transition-all disabled:opacity-30"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           <div className="p-5">
@@ -175,7 +193,7 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
                 <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
                   <motion.div
                     className="h-full bg-primary rounded-full"
-                    animate={{ width: `${overallPercent}%` }}
+                    animate={{ width: `${bytePercent}%` }}
                     transition={{ duration: 0.3 }}
                   />
                 </div>
