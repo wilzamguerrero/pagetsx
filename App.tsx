@@ -119,9 +119,9 @@ const App: React.FC = () => {
     metadata: { properties }
   });
 
-  const loadRootContent = async (service: NotionService, forceRefresh = false) => {
+  const loadRootContent = async (service: NotionService, rootId: string, forceRefresh = false) => {
     if (SHOW_LOGS) console.log(`[App] Loading root content, forceRefresh: ${forceRefresh}`);
-    const blocks = await service.getBlockChildren(ROOT_PAGE_ID, forceRefresh);
+    const blocks = await service.getBlockChildren(rootId, forceRefresh);
     const expanded = await service.getDeepBlockChildren(blocks, forceRefresh);
     const extractedBoards = service.extractBoards(expanded);
     
@@ -129,12 +129,12 @@ const App: React.FC = () => {
     const boardsWithIcons = await service.enrichBoardsWithIcons(extractedBoards);
     
     const finalBoards = await autoLoadDatabases(service, boardsWithIcons, forceRefresh);
-    const media = service.extractMedia(expanded, ROOT_PAGE_ID);
+    const media = service.extractMedia(expanded, rootId);
     
     if (SHOW_LOGS) console.log(`[App] Loaded ${finalBoards.length} boards, ${media.length} media items`);
     
     const finalMedia = media.length > 0 
-      ? [createTitleCard("Galería", ROOT_PAGE_ID), ...media]
+      ? [createTitleCard("Galería", rootId), ...media]
       : [];
 
     return {
@@ -145,19 +145,30 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const initApp = async () => {
-      // El token de Notion vive solo en el servidor (Cloudflare Functions).
-      // El cliente únicamente necesita el ID de la página raíz.
-      if (!ROOT_PAGE_ID) {
-        setState(prev => ({ ...prev, isLoading: false, error: 'Falta VITE_ROOT_PAGE_ID.' }));
-        return;
-      }
       try {
+        // El token de Notion y el ID de la página raíz viven en el servidor
+        // (Cloudflare Functions). Pedimos el ID de raíz en runtime; si el
+        // build incluyó VITE_ROOT_PAGE_ID, se usa como respaldo.
+        let rootId = ROOT_PAGE_ID;
+        try {
+          const cfgRes = await fetch('/api/config');
+          if (cfgRes.ok) {
+            const cfg = await cfgRes.json();
+            if (cfg.rootPageId) rootId = cfg.rootPageId;
+          }
+        } catch (e) { /* usar respaldo de build */ }
+
+        if (!rootId) {
+          setState(prev => ({ ...prev, isLoading: false, error: 'Falta ROOT_PAGE_ID en el servidor.' }));
+          return;
+        }
+
         const service = new NotionService(NOTION_PORTFOLIO_KEY);
         notionServiceRef.current = service;
-        const { boards } = await loadRootContent(service, true);
+        const { boards } = await loadRootContent(service, rootId, true);
         
         // Home siempre empieza con media vacío para mostrar logo y frases
-        setState(prev => ({ ...prev, boards, media: [], isLoading: false, error: null }));
+        setState(prev => ({ ...prev, rootPageId: rootId, boards, media: [], isLoading: false, error: null }));
         
         // Limpiar la URL y establecer el estado inicial del historial en home
         const url = new URL(window.location.href);
