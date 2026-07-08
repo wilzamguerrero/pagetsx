@@ -8,6 +8,17 @@ import {
   cleanNotionId,
 } from "../_shared/notion";
 
+// Extensiones de video que Notion acepta como bloque "video" reproducible.
+const VIDEO_EXTENSIONS = new Set([
+  "mp4", "mov", "webm", "m4v", "ogv", "avi", "wmv", "asf",
+  "flv", "f4v", "amv", "mpeg", "qt", "mkv", "3gp", "3g2",
+]);
+
+const getExt = (name: string): string => {
+  const i = name.lastIndexOf(".");
+  return i !== -1 ? name.slice(i + 1).toLowerCase() : "";
+};
+
 interface FileRecord {
   name: string;
   finalName: string;
@@ -48,7 +59,10 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   }
 
   const children = fileRecords.map((f) => {
-    const isImage = IMAGE_MIME_TYPES.has(f.mimeType);
+    const ext = getExt(f.name);
+    const isImage = IMAGE_MIME_TYPES.has(f.mimeType) || f.mimeType.startsWith("image/");
+    // Los videos comprimidos a .zip (extModified) ya no son reproducibles.
+    const isVideo = !f.extModified && (f.mimeType.startsWith("video/") || VIDEO_EXTENSIONS.has(ext));
     const caption = f.extModified
       ? [{ type: "text", text: { content: `${f.name} (.zip)` } }]
       : [{ type: "text", text: { content: f.name } }];
@@ -64,6 +78,19 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
         },
       };
     }
+
+    if (isVideo) {
+      return {
+        object: "block",
+        type: "video",
+        video: {
+          type: "file_upload",
+          file_upload: { id: f.uploadId },
+          caption,
+        },
+      };
+    }
+
     return {
       object: "block",
       type: "file",
