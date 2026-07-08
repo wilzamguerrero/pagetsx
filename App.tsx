@@ -145,8 +145,10 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const initApp = async () => {
-      if (!NOTION_PORTFOLIO_KEY) {
-        setState(prev => ({ ...prev, isLoading: false, error: 'API Key missing.' }));
+      // El token de Notion vive solo en el servidor (Cloudflare Functions).
+      // El cliente únicamente necesita el ID de la página raíz.
+      if (!ROOT_PAGE_ID) {
+        setState(prev => ({ ...prev, isLoading: false, error: 'Falta VITE_ROOT_PAGE_ID.' }));
         return;
       }
       try {
