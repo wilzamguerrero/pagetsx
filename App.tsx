@@ -385,7 +385,7 @@ const App: React.FC = () => {
       {/* Glitch overlay with chromatic aberration - only when effects enabled */}
       <GlitchOverlay isActive={isSidebarOpen && effectsEnabled} />
       {isSidebarOpen && (
-        <div className="fixed inset-0 bg-black/10 z-30 transition-opacity" onClick={() => setIsSidebarOpen(false)} />
+        <div className="fixed inset-0 bg-black/10 backdrop-blur-md z-30 transition-opacity" onClick={() => setIsSidebarOpen(false)} />
       )}
       <Sidebar
         boards={state.boards}
