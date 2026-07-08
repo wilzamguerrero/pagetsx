@@ -2,9 +2,9 @@ import React, { useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload, X, File as FileIcon, FileText, Image as ImageIcon,
-  Film, Music, CheckCircle2, Loader2, AlertCircle
+  Film, Music, CheckCircle2, Loader2, AlertCircle, Check
 } from 'lucide-react';
-import { uploadFilesToBoard, UploadProgress } from '../services/uploadService';
+import { uploadFilesToBoard, FileStatus } from '../services/uploadService';
 
 interface UploadPanelProps {
   boardId: string;
@@ -41,7 +41,8 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
   const [files, setFiles] = useState<File[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const [statuses, setStatuses] = useState<Record<number, FileStatus>>({});
+  const [step, setStep] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -71,8 +72,14 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
     if (files.length === 0 || isUploading) return;
     setIsUploading(true);
     setError(null);
+    setStatuses({});
     try {
-      await uploadFilesToBoard(boardId, files, (p) => setProgress(p));
+      await uploadFilesToBoard(
+        boardId,
+        files,
+        (index, status) => setStatuses(prev => ({ ...prev, [index]: status })),
+        (s) => setStep(s)
+      );
       setDone(true);
       onUploaded(boardId);
       setTimeout(() => onClose(), 900);
@@ -84,6 +91,8 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
   }, [files, isUploading, boardId, onUploaded, onClose]);
 
   const totalSize = files.reduce((acc, f) => acc + f.size, 0);
+  const doneCount = Object.values(statuses).filter(s => s === 'done').length;
+  const overallPercent = files.length ? Math.round((doneCount / files.length) * 100) : 0;
 
   return (
     <AnimatePresence>
@@ -153,55 +162,87 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
               </div>
             )}
 
-            {/* File queue */}
-            {files.length > 0 && !done && (
-              <div className={isUploading ? '' : 'mt-4'}>
+            {/* Progress global durante la subida */}
+            {isUploading && (
+              <div className="mb-4">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
-                    En cola ({files.length})
-                  </span>
-                  <span className="text-[10px] text-gray-600 font-mono">{formatSize(totalSize)}</span>
-                </div>
-                <div className="space-y-1.5 max-h-44 overflow-y-auto no-scrollbar pr-0.5">
-                  {files.map((file, idx) => (
-                    <div
-                      key={`${file.name}-${idx}`}
-                      className="flex items-center justify-between bg-black/30 border border-white/5 p-2.5 rounded-lg group"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                        <div className="p-1.5 bg-white/5 rounded-md shrink-0">{getFileIcon(file.name)}</div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-medium text-gray-200 truncate">{file.name}</p>
-                          <p className="text-[10px] text-gray-500 font-mono">{formatSize(file.size)}</p>
-                        </div>
-                      </div>
-                      {!isUploading && (
-                        <button
-                          onClick={() => removeFile(idx)}
-                          className="p-1 rounded-md text-gray-500 hover:bg-red-500/10 hover:text-red-400 transition-colors shrink-0"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Progress */}
-            {isUploading && progress && (
-              <div className="mt-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Loader2 className="w-3.5 h-3.5 text-primary animate-spin shrink-0" />
-                  <p className="text-xs text-gray-300 truncate">{progress.step}</p>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Loader2 className="w-3.5 h-3.5 text-primary animate-spin shrink-0" />
+                    <p className="text-xs text-gray-300 truncate">{step || 'Subiendo...'}</p>
+                  </div>
+                  <span className="text-[10px] text-gray-500 font-mono shrink-0 ml-2">{doneCount}/{files.length}</span>
                 </div>
                 <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
                   <motion.div
                     className="h-full bg-primary rounded-full"
-                    animate={{ width: `${progress.percent}%` }}
+                    animate={{ width: `${overallPercent}%` }}
                     transition={{ duration: 0.3 }}
                   />
+                </div>
+              </div>
+            )}
+
+            {/* Lista de archivos (con fade + check al terminar) */}
+            {files.length > 0 && !done && (
+              <div className={isUploading ? '' : 'mt-4'}>
+                {!isUploading && (
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                      En cola ({files.length})
+                    </span>
+                    <span className="text-[10px] text-gray-600 font-mono">{formatSize(totalSize)}</span>
+                  </div>
+                )}
+                <div className="space-y-1.5 max-h-56 overflow-y-auto no-scrollbar pr-0.5">
+                  {files.map((file, idx) => {
+                    const status = statuses[idx];
+                    const isDone = status === 'done';
+                    const isBusy = status === 'uploading';
+                    return (
+                      <motion.div
+                        key={`${file.name}-${idx}`}
+                        animate={{ opacity: isDone ? 0.4 : 1 }}
+                        transition={{ duration: 0.5 }}
+                        className={`flex items-center justify-between border p-2.5 rounded-lg group transition-colors ${
+                          isDone
+                            ? 'bg-primary/5 border-primary/20'
+                            : isBusy
+                              ? 'bg-white/[0.04] border-primary/20'
+                              : 'bg-black/30 border-white/5'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <div className="p-1.5 bg-white/5 rounded-md shrink-0">{getFileIcon(file.name)}</div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-medium text-gray-200 truncate">{file.name}</p>
+                            <p className="text-[10px] text-gray-500 font-mono">{formatSize(file.size)}</p>
+                          </div>
+                        </div>
+
+                        {/* Estado a la derecha */}
+                        {isDone ? (
+                          <motion.div
+                            initial={{ scale: 0 }}
+                            animate={{ scale: 1 }}
+                            className="w-5 h-5 rounded-full bg-primary/20 flex items-center justify-center shrink-0"
+                          >
+                            <Check className="w-3.5 h-3.5 text-primary" />
+                          </motion.div>
+                        ) : isBusy ? (
+                          <Loader2 className="w-4 h-4 text-primary animate-spin shrink-0" />
+                        ) : !isUploading ? (
+                          <button
+                            onClick={() => removeFile(idx)}
+                            className="p-1 rounded-md text-gray-500 hover:bg-red-500/10 hover:text-red-400 transition-colors shrink-0"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        ) : (
+                          <div className="w-4 h-4 shrink-0" />
+                        )}
+                      </motion.div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -210,7 +251,9 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
             {done && (
               <div className="flex flex-col items-center gap-2 py-6">
                 <CheckCircle2 className="w-10 h-10 text-primary" />
-                <p className="text-sm text-white font-semibold">Archivos subidos a Notion</p>
+                <p className="text-sm text-white font-semibold">
+                  {files.length} archivo{files.length !== 1 ? 's' : ''} subido{files.length !== 1 ? 's' : ''} a Notion
+                </p>
               </div>
             )}
 

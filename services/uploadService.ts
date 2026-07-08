@@ -86,53 +86,33 @@ export const uploadOneFile = async (
     wasCompressed = true;
   }
 
-  // ── Small file: single-part chunked flow (still uses init/part/complete=null) ──
+  // ── Archivo pequeño: una sola petición a /api/upload-file (rápido) ──
   if (uploadFile.size <= SMALL_FILE_THRESHOLD) {
     report(0, `Subiendo ${label}...`);
 
-    const initRes = await fetch("/api/upload-init", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: uploadFile.name,
-        mimeType: uploadFile.type,
-        fileSize: uploadFile.size,
-      }),
-    });
-    const initData = await initRes.json();
-    if (!initRes.ok || !initData.success) {
-      throw new Error(initData.error || `Error al inicializar "${originalName}"`);
-    }
-
-    const { id: uploadId, uploadName, contentType } = initData;
-
-    const chunkBlob = new Blob([uploadFile], { type: contentType || "application/octet-stream" });
     const fd = new FormData();
-    fd.append("file", chunkBlob, uploadName);
+    fd.append("file", uploadFile, uploadFile.name);
 
-    const sendRes = await fetch(`/api/upload-part?upload_id=${encodeURIComponent(uploadId)}`, {
-      method: "POST",
-      body: fd,
-    });
-    const sendText = await sendRes.text();
-    let sendData: any;
+    const res = await fetch("/api/upload-file", { method: "POST", body: fd });
+    const text = await res.text();
+    let data: any;
     try {
-      sendData = JSON.parse(sendText);
+      data = JSON.parse(text);
     } catch {
       throw new Error(`Respuesta inesperada del servidor al subir "${originalName}".`);
     }
-    if (!sendRes.ok || (!sendData.success && !sendData.id)) {
-      throw new Error(sendData.error || `Error al subir "${originalName}"`);
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || `Error al subir "${originalName}"`);
     }
 
     report(100, `Subido ${label}`);
 
     return {
       name: originalName,
-      finalName: uploadName,
+      finalName: data.finalName as string,
       size: file.size,
-      uploadId,
-      extModified: wasCompressed || !!initData.extModified,
+      uploadId: data.id as string,
+      extModified: wasCompressed || !!data.extModified,
       mimeType: file.type || "application/octet-stream",
     };
   }
@@ -255,24 +235,64 @@ export const uploadOneFile = async (
   };
 };
 
-/** Upload every file then attach them as blocks inside the target toggle. */
+export type FileStatus = "pending" | "uploading" | "done";
+
+// Cuántos archivos se suben a la vez. Varios archivos pequeños en paralelo
+// aceleran mucho la subida frente a hacerlos de uno en uno.
+const FILE_CONCURRENCY = 4;
+const FILE_RETRIES = 3;
+
+const uploadOneFileWithRetry = async (
+  file: File,
+  index: number,
+  total: number,
+  onProgress?: ProgressCb
+): Promise<UploadRecord> => {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= FILE_RETRIES; attempt++) {
+    try {
+      return await uploadOneFile(file, index, total, onProgress);
+    } catch (err: any) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < FILE_RETRIES) {
+        const backoff = Math.min(8000, 800 * Math.pow(2, attempt - 1));
+        await new Promise((r) => setTimeout(r, backoff + Math.random() * 400));
+      }
+    }
+  }
+  throw lastError || new Error(`No se pudo subir "${file.name}".`);
+};
+
+/**
+ * Sube todos los archivos (en paralelo, con reintentos) y luego los adjunta
+ * como bloques dentro del toggle destino.
+ */
 export const uploadFilesToBoard = async (
   boardId: string,
   files: File[],
-  onProgress?: ProgressCb
+  onFileStatus?: (index: number, status: FileStatus) => void,
+  onStep?: (step: string) => void
 ): Promise<{ count: number }> => {
-  const records: UploadRecord[] = [];
-  for (let i = 0; i < files.length; i++) {
-    records.push(await uploadOneFile(files[i], i, files.length, onProgress));
-  }
+  const records: UploadRecord[] = new Array(files.length);
 
-  onProgress?.({
-    fileName: "",
-    fileIndex: files.length,
-    totalFiles: files.length,
-    percent: 100,
-    step: "Adjuntando a Notion...",
-  });
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = next++;
+      if (i >= files.length) return;
+      onFileStatus?.(i, "uploading");
+      records[i] = await uploadOneFileWithRetry(files[i], i, files.length, (p) =>
+        onStep?.(p.step)
+      );
+      onFileStatus?.(i, "done");
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(FILE_CONCURRENCY, files.length) }, () => worker())
+  );
+
+  onStep?.("Adjuntando a Notion...");
 
   const res = await fetch("/api/upload-attach", {
     method: "POST",
