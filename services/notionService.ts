@@ -522,4 +522,39 @@ export class NotionService {
     this.invalidateBlock(parentId);
     return { id: data.results[0].id, title, parentId, type: 'toggle', hasChildren: false, isLoaded: true };
   }
+
+  /**
+   * Elimina (archiva) un tablero en Notion. Los toggles se borran como bloques;
+   * las páginas de base de datos se archivan como páginas. Notion lo mueve a la
+   * papelera, así que es recuperable manualmente desde la interfaz de Notion.
+   */
+  async deleteBoard(board: Board): Promise<void> {
+    const cleanId = NotionService.formatUUID(board.id);
+    if (board.type === 'page') {
+      await this.notionFetch(`/pages/${cleanId}`, 'PATCH', { archived: true });
+    } else {
+      await this.notionFetch(`/blocks/${cleanId}`, 'DELETE');
+    }
+    this.invalidateBlock(board.id);
+    if (board.parentId) this.invalidateBlock(board.parentId);
+  }
+
+  /**
+   * Renombra un tablero. Los toggles actualizan su rich_text; las páginas
+   * actualizan su propiedad de título.
+   */
+  async renameBoard(board: Board, newTitle: string): Promise<void> {
+    const cleanId = NotionService.formatUUID(board.id);
+    if (board.type === 'page') {
+      await this.notionFetch(`/pages/${cleanId}`, 'PATCH', {
+        properties: { title: { title: [{ text: { content: newTitle } }] } },
+      });
+    } else {
+      await this.notionFetch(`/blocks/${cleanId}`, 'PATCH', {
+        toggle: { rich_text: [{ text: { content: newTitle } }] },
+      });
+    }
+    this.invalidateBlock(board.id);
+    if (board.parentId) this.invalidateBlock(board.parentId);
+  }
 }

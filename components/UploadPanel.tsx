@@ -2,9 +2,9 @@ import React, { useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload, X, File as FileIcon, FileText, Image as ImageIcon,
-  Film, Music, CheckCircle2, Loader2, AlertCircle, Check
+  Film, Music, CheckCircle2, Loader2, AlertCircle, Check, Folder, FolderUp
 } from 'lucide-react';
-import { uploadFilesToBoard, FileStatus } from '../services/uploadService';
+import { uploadFilesToBoard, FileStatus, QueuedFile } from '../services/uploadService';
 
 interface UploadPanelProps {
   boardId: string;
@@ -37,19 +37,68 @@ const getFileIcon = (fileName: string) => {
   }
 };
 
+// ── Lectura de carpetas arrastradas (drag & drop) ──
+// La API webkitGetAsEntry permite recorrer la estructura de carpetas soltadas.
+
+const readAllDirEntries = (reader: any): Promise<any[]> =>
+  new Promise((resolve, reject) => {
+    const out: any[] = [];
+    const readBatch = () => {
+      // readEntries devuelve como máximo 100 entradas por llamada.
+      reader.readEntries((batch: any[]) => {
+        if (batch.length === 0) return resolve(out);
+        out.push(...batch);
+        readBatch();
+      }, reject);
+    };
+    readBatch();
+  });
+
+const entryToFile = (entry: any): Promise<File> =>
+  new Promise((resolve, reject) => entry.file(resolve, reject));
+
+/** Recorre recursivamente una entrada (archivo o carpeta) acumulando QueuedFile. */
+const traverseEntry = async (entry: any, prefix: string, out: QueuedFile[]): Promise<void> => {
+  if (!entry) return;
+  if (entry.isFile) {
+    const file = await entryToFile(entry);
+    out.push({ file, path: prefix + file.name });
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader();
+    const entries = await readAllDirEntries(reader);
+    const nextPrefix = prefix + entry.name + '/';
+    for (const child of entries) {
+      await traverseEntry(child, nextPrefix, out);
+    }
+  }
+};
+
 export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, onClose, onUploaded }) => {
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<QueuedFile[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
+  const [isReadingFolder, setIsReadingFolder] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [statuses, setStatuses] = useState<Record<number, FileStatus>>({});
   const [step, setStep] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
+  // Archivos sueltos (input normal o drop plano).
   const addFiles = (list: FileList | null) => {
     if (!list || list.length === 0) return;
-    setFiles(prev => [...prev, ...Array.from(list)]);
+    const items: QueuedFile[] = Array.from(list).map((file) => ({
+      // webkitRelativePath viene relleno cuando se selecciona una carpeta.
+      file,
+      path: (file as any).webkitRelativePath || file.name,
+    }));
+    setFiles(prev => [...prev, ...items]);
+  };
+
+  const addQueued = (items: QueuedFile[]) => {
+    if (items.length === 0) return;
+    setFiles(prev => [...prev, ...items]);
   };
 
   const handleDrag = (e: React.DragEvent) => {
@@ -59,11 +108,40 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
     else if (e.type === 'dragleave') setIsDragActive(false);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragActive(false);
-    addFiles(e.dataTransfer.files);
+
+    const dt = e.dataTransfer;
+    // Captura las entradas de forma síncrona: los items se invalidan tras un await.
+    const entries: any[] = [];
+    if (dt.items && dt.items.length > 0 && typeof (dt.items[0] as any).webkitGetAsEntry === 'function') {
+      for (let i = 0; i < dt.items.length; i++) {
+        const entry = (dt.items[i] as any).webkitGetAsEntry();
+        if (entry) entries.push(entry);
+      }
+    }
+
+    if (entries.length > 0) {
+      setIsReadingFolder(true);
+      try {
+        const collected: QueuedFile[] = [];
+        for (const entry of entries) {
+          await traverseEntry(entry, '', collected);
+        }
+        addQueued(collected);
+      } catch {
+        // Fallback a la lista plana si algo falla al leer carpetas.
+        addFiles(dt.files);
+      } finally {
+        setIsReadingFolder(false);
+      }
+      return;
+    }
+
+    // Navegadores sin soporte de entries: solo archivos planos.
+    addFiles(dt.files);
   };
 
   const removeFile = (idx: number) => setFiles(prev => prev.filter((_, i) => i !== idx));
@@ -90,9 +168,16 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
     }
   }, [files, isUploading, boardId, onUploaded, onClose]);
 
-  const totalSize = files.reduce((acc, f) => acc + f.size, 0);
+  // Número de carpetas de nivel superior detectadas en la cola.
+  const folderCount = new Set(
+    files
+      .filter(it => /[\\/]/.test(it.path))
+      .map(it => it.path.split(/[\\/]/)[0])
+  ).size;
+
+  const totalSize = files.reduce((acc, it) => acc + it.file.size, 0);
   const doneCount = Object.values(statuses).filter(s => s === 'done').length;
-  const uploadedBytes = files.reduce((acc, f, i) => acc + (statuses[i] === 'done' ? f.size : 0), 0);
+  const uploadedBytes = files.reduce((acc, it, i) => acc + (statuses[i] === 'done' ? it.file.size : 0), 0);
   const bytePercent = totalSize ? Math.round((uploadedBytes / totalSize) * 100) : 0;
 
   return (
@@ -168,14 +253,45 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
                   type="file"
                   multiple
                   className="hidden"
-                  onChange={(e) => addFiles(e.target.files)}
+                  onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }}
+                />
+                {/* Input de carpeta: webkitdirectory rellena webkitRelativePath. */}
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  multiple
+                  // @ts-expect-error atributos no estándar para selección de carpetas
+                  webkitdirectory=""
+                  directory=""
+                  className="hidden"
+                  onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }}
                 />
                 <div className="p-3 bg-white/5 rounded-xl text-primary">
-                  <Upload className="w-7 h-7" />
+                  {isReadingFolder ? <Loader2 className="w-7 h-7 animate-spin" /> : <Upload className="w-7 h-7" />}
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-white">Arrastra archivos o haz clic</h3>
-                  <p className="text-[11px] text-gray-500 mt-0.5">Cualquier tipo · hasta 5 GB por archivo</p>
+                  <h3 className="text-sm font-semibold text-white">
+                    {isReadingFolder ? 'Leyendo carpeta...' : 'Arrastra archivos o carpetas'}
+                  </h3>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Las carpetas se convierten en toggles · hasta 5 GB por archivo
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 mt-1" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold text-gray-300 bg-white/5 hover:bg-white/10 transition-colors"
+                  >
+                    <FileIcon className="w-3.5 h-3.5" /> Archivos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => folderInputRef.current?.click()}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold text-gray-300 bg-white/5 hover:bg-white/10 transition-colors"
+                  >
+                    <FolderUp className="w-3.5 h-3.5" /> Carpeta
+                  </button>
                 </div>
               </div>
             )}
@@ -206,19 +322,23 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
                 {!isUploading && (
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
-                      En cola ({files.length})
+                      En cola ({files.length}{folderCount > 0 ? ` · ${folderCount} carpeta${folderCount !== 1 ? 's' : ''}` : ''})
                     </span>
                     <span className="text-[10px] text-gray-600 font-mono">{formatSize(totalSize)}</span>
                   </div>
                 )}
                 <div className="space-y-1.5 max-h-56 overflow-y-auto no-scrollbar pr-0.5">
-                  {files.map((file, idx) => {
+                  {files.map((item, idx) => {
+                    const file = item.file;
+                    const folderPath = item.path.includes('/') || item.path.includes('\\')
+                      ? item.path.slice(0, item.path.length - file.name.length).replace(/[\\/]+$/, '')
+                      : '';
                     const status = statuses[idx];
                     const isDone = status === 'done';
                     const isBusy = status === 'uploading';
                     return (
                       <motion.div
-                        key={`${file.name}-${idx}`}
+                        key={`${item.path}-${idx}`}
                         animate={{ opacity: isDone ? 0.4 : 1 }}
                         transition={{ duration: 0.5 }}
                         className={`flex items-center justify-between border p-2.5 rounded-lg group transition-colors ${
@@ -232,6 +352,11 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ boardId, boardTitle, o
                         <div className="flex items-center gap-2.5 min-w-0 flex-1">
                           <div className="p-1.5 bg-white/5 rounded-md shrink-0">{getFileIcon(file.name)}</div>
                           <div className="min-w-0 flex-1">
+                            {folderPath && (
+                              <p className="text-[9px] text-primary/70 font-mono flex items-center gap-1 truncate">
+                                <Folder className="w-2.5 h-2.5 shrink-0" /> {folderPath}
+                              </p>
+                            )}
                             <p className="text-xs font-medium text-gray-200 truncate">{file.name}</p>
                             <p className="text-[10px] text-gray-500 font-mono">{formatSize(file.size)}</p>
                           </div>

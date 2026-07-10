@@ -4,7 +4,8 @@ import { Board, Language } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
     Folder, FileText, Database, ChevronRight, ChevronDown, ChevronLeft, 
-    Maximize, Minimize, Circle, Home, Sparkles, Upload, Plus, Check, X, Search
+    Maximize, Minimize, Circle, Home, Sparkles, Upload, Plus, Check, X, Search,
+    Pencil, Trash2
 } from 'lucide-react';
 import { t } from '../services/i18nService';
 import { UploadPanel } from './UploadPanel';
@@ -28,6 +29,8 @@ interface SidebarProps {
   onContentUploaded: (boardId: string) => void;
   onEnsureAllLoaded: () => void;
   isIndexing: boolean;
+  onDeleteBoard: (board: Board) => Promise<void>;
+  onRenameBoard: (board: Board, newTitle: string) => Promise<void>;
 }
 
 const MARKER_COLORS = [
@@ -51,8 +54,10 @@ const BoardTreeItem: React.FC<{
     showDatabaseNames: boolean,
     uploadMode: boolean,
     onUpload: (board: Board) => void,
-    onCreateBoard: (parentId: string, title: string) => Promise<Board>
-}> = ({ board, allBoards, activeBoardId, onSelect, depth, boardMarkers, onSetMarker, strings, showDatabaseNames, uploadMode, onUpload, onCreateBoard }) => {
+    onCreateBoard: (parentId: string, title: string) => Promise<Board>,
+    onDeleteBoard: (board: Board) => Promise<void>,
+    onRenameBoard: (board: Board, newTitle: string) => Promise<void>
+}> = ({ board, allBoards, activeBoardId, onSelect, depth, boardMarkers, onSetMarker, strings, showDatabaseNames, uploadMode, onUpload, onCreateBoard, onDeleteBoard, onRenameBoard }) => {
     const children = allBoards.filter(b => b.parentId === board.id);
     const hasKnownChildren = children.length > 0;
     const isActive = activeBoardId === board.id;
@@ -61,6 +66,11 @@ const BoardTreeItem: React.FC<{
     const [isAddingChild, setIsAddingChild] = useState(false);
     const [newChildTitle, setNewChildTitle] = useState('');
     const [isCreatingChild, setIsCreatingChild] = useState(false);
+    const [isRenaming, setIsRenaming] = useState(false);
+    const [renameTitle, setRenameTitle] = useState(board.title);
+    const [isSavingRename, setIsSavingRename] = useState(false);
+    const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     // Solo se pueden crear sub-toggles y subir archivos dentro de toggles/páginas (no en bases de datos)
     const canManage = board.type === 'toggle' || board.type === 'page';
@@ -76,6 +86,29 @@ const BoardTreeItem: React.FC<{
             setIsExpanded(true);
         } finally {
             setIsCreatingChild(false);
+        }
+    };
+
+    const submitRename = async () => {
+        const title = renameTitle.trim();
+        if (!title || isSavingRename) return;
+        setIsSavingRename(true);
+        try {
+            await onRenameBoard(board, title);
+            setIsRenaming(false);
+        } finally {
+            setIsSavingRename(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        if (isDeleting) return;
+        setIsDeleting(true);
+        try {
+            await onDeleteBoard(board);
+            setIsConfirmingDelete(false);
+        } finally {
+            setIsDeleting(false);
         }
     };
     
@@ -100,6 +133,8 @@ const BoardTreeItem: React.FC<{
                         uploadMode={uploadMode}
                         onUpload={onUpload}
                         onCreateBoard={onCreateBoard}
+                        onDeleteBoard={onDeleteBoard}
+                        onRenameBoard={onRenameBoard}
                     />
                 ))}
             </>
@@ -210,6 +245,20 @@ const BoardTreeItem: React.FC<{
                             >
                                 <Upload className="w-3.5 h-3.5" />
                             </button>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setRenameTitle(board.title); setIsRenaming(v => !v); setIsConfirmingDelete(false); }}
+                                title="Renombrar"
+                                className="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-primary hover:bg-white/10 transition-all"
+                            >
+                                <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setIsConfirmingDelete(v => !v); setIsRenaming(false); }}
+                                title="Eliminar"
+                                className="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                            >
+                                <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                         </>
                     )}
                     <button 
@@ -267,6 +316,58 @@ const BoardTreeItem: React.FC<{
                 </div>
             )}
 
+            {isRenaming && (
+                <div className="flex items-center gap-1.5 my-1" style={{ paddingLeft: `${depth * 12 + 8}px` }}>
+                    <input
+                        autoFocus
+                        value={renameTitle}
+                        onChange={(e) => setRenameTitle(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') submitRename();
+                            if (e.key === 'Escape') { setIsRenaming(false); setRenameTitle(board.title); }
+                        }}
+                        placeholder="Nuevo nombre..."
+                        className="flex-1 min-w-0 bg-black/40 border border-white/10 focus:border-primary/40 rounded-md px-2 py-1 text-[12px] text-white placeholder-gray-600 outline-none"
+                    />
+                    <button
+                        onClick={(e) => { e.stopPropagation(); submitRename(); }}
+                        disabled={!renameTitle.trim() || isSavingRename}
+                        className="w-6 h-6 flex items-center justify-center rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-all disabled:opacity-30"
+                    >
+                        {isSavingRename ? <div className="loader scale-[0.18] origin-center" /> : <Check className="w-3.5 h-3.5" />}
+                    </button>
+                    <button
+                        onClick={(e) => { e.stopPropagation(); setIsRenaming(false); setRenameTitle(board.title); }}
+                        className="w-6 h-6 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/10 transition-all"
+                    >
+                        <X className="w-3.5 h-3.5" />
+                    </button>
+                </div>
+            )}
+
+            {isConfirmingDelete && (
+                <div className="flex items-center gap-2 my-1" style={{ paddingLeft: `${depth * 12 + 8}px` }}>
+                    <span className="text-[11px] text-red-400/90 truncate flex-1 min-w-0">
+                        ¿Eliminar esta lista y su contenido?
+                    </span>
+                    <button
+                        onClick={(e) => { e.stopPropagation(); handleDelete(); }}
+                        disabled={isDeleting}
+                        className="flex items-center gap-1 px-2 h-6 rounded-md bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-all disabled:opacity-30 text-[11px] font-bold shrink-0"
+                    >
+                        {isDeleting ? <div className="loader scale-[0.18] origin-center" /> : <Trash2 className="w-3 h-3" />}
+                        Eliminar
+                    </button>
+                    <button
+                        onClick={(e) => { e.stopPropagation(); setIsConfirmingDelete(false); }}
+                        className="w-6 h-6 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/10 transition-all shrink-0"
+                    >
+                        <X className="w-3.5 h-3.5" />
+                    </button>
+                </div>
+            )}
+
             {isExpanded && (
                 <div className="relative">
                     {children.map(child => (
@@ -284,6 +385,8 @@ const BoardTreeItem: React.FC<{
                             uploadMode={uploadMode}
                             onUpload={onUpload}
                             onCreateBoard={onCreateBoard}
+                            onDeleteBoard={onDeleteBoard}
+                            onRenameBoard={onRenameBoard}
                         />
                     ))}
                 </div>
@@ -296,7 +399,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     boards, activeBoardId, onSelectBoard, onGoHome, onCreateBoard, isOpen, onToggle, 
     columnCount, onColumnChange, language, onToggleLanguage, showDatabaseNames,
     effectsEnabled, onToggleEffects, rootPageId, onContentUploaded,
-    onEnsureAllLoaded, isIndexing
+    onEnsureAllLoaded, isIndexing, onDeleteBoard, onRenameBoard
 }) => {
   const strings = t(language);
   const [boardMarkers, setBoardMarkers] = useState<Record<string, string>>({});
@@ -405,7 +508,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Panel a pantalla completa con fondo translúcido */}
-      <div className={`fixed inset-2 sm:inset-4 z-40 flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-surface/50 backdrop-blur-md shadow-2xl transition-all duration-300 ${isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-[0.98] pointer-events-none'}`}>
+      <div className={`fixed inset-2 sm:inset-4 z-40 flex flex-col overflow-hidden rounded-2xl border border-white/10 shadow-2xl transition-all duration-500 ease-in-out ${isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-[0.98] pointer-events-none'}`}>
         {/* Cabecera con acciones */}
         <div className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-white/5">
           <div className="flex items-center gap-2.5 min-w-0 shrink">
@@ -575,6 +678,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       uploadMode={uploadMode}
                       onUpload={setUploadTarget}
                       onCreateBoard={onCreateBoard}
+                      onDeleteBoard={onDeleteBoard}
+                      onRenameBoard={onRenameBoard}
                   />
                 </div>
               ))}

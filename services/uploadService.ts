@@ -16,6 +16,19 @@ export interface UploadRecord {
   uploadId: string;
   extModified: boolean;
   mimeType: string;
+  /**
+   * Ruta relativa dentro del lote, incluyendo carpetas y el nombre del archivo.
+   * Ej: "carpeta/subcarpeta/foto.png" o "foto.png" (raíz). El backend la usa
+   * para reconstruir el árbol de toggles en Notion.
+   */
+  path: string;
+}
+
+/** Archivo en cola junto a su ruta relativa (para arrastre de carpetas). */
+export interface QueuedFile {
+  file: File;
+  /** Ruta relativa con carpetas + nombre. Sin carpetas es solo el nombre. */
+  path: string;
 }
 
 export interface UploadProgress {
@@ -127,9 +140,11 @@ export const uploadOneFile = async (
   fileIndex: number,
   totalFiles: number,
   sem: Semaphore,
-  onProgress?: ProgressCb
+  onProgress?: ProgressCb,
+  relativePath?: string
 ): Promise<UploadRecord> => {
   const originalName = file.name;
+  const path = relativePath || originalName;
   const label = `${originalName} (${fileIndex + 1}/${totalFiles})`;
   const report = (percent: number, step: string) =>
     onProgress?.({ fileName: originalName, fileIndex, totalFiles, percent, step });
@@ -180,6 +195,7 @@ export const uploadOneFile = async (
       uploadId: data.id as string,
       extModified: wasCompressed || !!data.extModified,
       mimeType: file.type || "application/octet-stream",
+      path,
     };
   }
 
@@ -268,6 +284,7 @@ export const uploadOneFile = async (
     uploadId,
     extModified: wasCompressed || !!initData.extModified,
     mimeType: file.type || "application/octet-stream",
+    path,
   };
 };
 
@@ -276,25 +293,32 @@ export const uploadOneFile = async (
  */
 export const uploadFilesToBoard = async (
   boardId: string,
-  files: File[],
+  items: QueuedFile[],
   onFileStatus?: (index: number, status: FileStatus) => void,
   onStep?: (step: string) => void
 ): Promise<{ count: number }> => {
-  const records: UploadRecord[] = new Array(files.length);
+  const records: UploadRecord[] = new Array(items.length);
   const sem = new Semaphore(GLOBAL_CONCURRENCY);
 
   // Pool de archivos adaptado: pocos archivos grandes a la vez (para que cada
   // uno acapare más huecos y termine antes) o muchos pequeños en paralelo.
-  const hasLarge = files.some((f) => f.size > SMALL_FILE_THRESHOLD);
-  const filePool = Math.min(hasLarge ? LARGE_FILE_POOL : SMALL_FILE_POOL, files.length);
+  const hasLarge = items.some((it) => it.file.size > SMALL_FILE_THRESHOLD);
+  const filePool = Math.min(hasLarge ? LARGE_FILE_POOL : SMALL_FILE_POOL, items.length);
 
   let next = 0;
   const worker = async (): Promise<void> => {
     while (true) {
       const i = next++;
-      if (i >= files.length) return;
+      if (i >= items.length) return;
       onFileStatus?.(i, "uploading");
-      records[i] = await uploadOneFile(files[i], i, files.length, sem, (p) => onStep?.(p.step));
+      records[i] = await uploadOneFile(
+        items[i].file,
+        i,
+        items.length,
+        sem,
+        (p) => onStep?.(p.step),
+        items[i].path
+      );
       onFileStatus?.(i, "done");
     }
   };

@@ -380,13 +380,46 @@ const App: React.FC = () => {
     setState(prev => ({ ...prev, media: newMedia }));
   };
 
+  // Elimina (archiva) un tablero y lo quita del árbol junto a sus descendientes.
+  const handleDeleteBoard = async (board: Board) => {
+    if (!notionServiceRef.current) return;
+    await notionServiceRef.current.deleteBoard(board);
+    setState(prev => {
+      const toRemove = new Set<string>();
+      const collect = (id: string) => {
+        toRemove.add(id);
+        prev.boards.filter(b => b.parentId === id).forEach(c => collect(c.id));
+      };
+      collect(board.id);
+      const boards = prev.boards.filter(b => !toRemove.has(b.id));
+      const wasActive = !!prev.activeBoardId && toRemove.has(prev.activeBoardId);
+      return {
+        ...prev,
+        boards,
+        activeBoardId: wasActive ? null : prev.activeBoardId,
+        media: wasActive ? [] : prev.media,
+      };
+    });
+  };
+
+  // Renombra un tablero y actualiza su título en el árbol.
+  const handleRenameBoard = async (board: Board, newTitle: string) => {
+    if (!notionServiceRef.current) return;
+    await notionServiceRef.current.renameBoard(board, newTitle);
+    setState(prev => ({
+      ...prev,
+      boards: prev.boards.map(b => (b.id === board.id ? { ...b, title: newTitle } : b)),
+    }));
+  };
+
   return (
     <div className="min-h-screen bg-background text-white flex overflow-x-hidden">
       {/* Glitch overlay with chromatic aberration - only when effects enabled */}
       <GlitchOverlay isActive={isSidebarOpen && effectsEnabled} />
-      {isSidebarOpen && (
-        <div className="fixed inset-0 bg-black/10 backdrop-blur-md z-30 transition-opacity" onClick={() => setIsSidebarOpen(false)} />
-      )}
+      <div
+        className={`fixed inset-0 bg-background/95 z-30 transition-opacity duration-500 ease-in-out ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+        onClick={() => setIsSidebarOpen(false)}
+      />
       <Sidebar
         boards={state.boards}
         activeBoardId={state.activeBoardId}
@@ -401,6 +434,8 @@ const App: React.FC = () => {
           setState(prev => ({ ...prev, boards: [...prev.boards, normalized] }));
           return normalized;
         }}
+        onDeleteBoard={handleDeleteBoard}
+        onRenameBoard={handleRenameBoard}
         isOpen={isSidebarOpen}
         onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
         columnCount={columnCount}
