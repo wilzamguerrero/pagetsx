@@ -8,6 +8,20 @@ import { t } from './services/i18nService';
 
 const SHOW_DATABASE_NAMES = false; 
 
+// Reconstruye un UUID con guiones (8-4-4-4-12) a partir de 32 hex sin guiones.
+const toDashedId = (hex: string): string => {
+  const c = hex.replace(/-/g, '');
+  if (c.length !== 32) return hex;
+  return `${c.slice(0, 8)}-${c.slice(8, 12)}-${c.slice(12, 16)}-${c.slice(16, 20)}-${c.slice(20)}`;
+};
+
+// Lee el ID de tablero desde el path actual (/<32hex>), o null si no hay.
+const readBoardIdFromPath = (): string | null => {
+  const raw = window.location.pathname.replace(/^\/+/, '').split(/[/?#]/)[0];
+  const clean = raw.replace(/-/g, '');
+  return /^[a-f0-9]{32}$/i.test(clean) ? toDashedId(clean) : null;
+};
+
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>({
     isAuthenticated: true, 
@@ -24,6 +38,8 @@ const App: React.FC = () => {
   
   // Flag para evitar pushState cuando navegamos con popstate
   const isNavigatingRef = useRef(false);
+  // ID de tablero pendiente de abrir por deep-link (una vez cargados los tableros)
+  const pendingDeepLinkRef = useRef<string | null>(null);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   // Detectar si es móvil para columnas por defecto
@@ -99,18 +115,13 @@ const App: React.FC = () => {
   // Actualizar URL sin recargar la página
   const updateUrl = useCallback((boardId: string | null) => {
     if (isNavigatingRef.current) return;
-    
-    const url = new URL(window.location.href);
-    if (boardId) {
-      url.searchParams.set('board', boardId);
-    } else {
-      url.searchParams.delete('board');
-    }
-    
+
+    // Ruta limpia: /<id-sin-guiones> para un tablero, o / para el home.
+    const path = boardId ? `/${NotionService.formatUUID(boardId)}` : '/';
     const selectedBoard = state.boards.find(b => b.id === boardId);
     const title = selectedBoard?.title || 'Portfolio';
-    
-    window.history.pushState({ boardId }, title, url.toString());
+
+    window.history.pushState({ boardId }, title, path);
   }, [state.boards]);
 
   const autoLoadDatabases = async (service: NotionService, currentBoards: Board[], forceRefresh = false) => {
@@ -231,11 +242,18 @@ const App: React.FC = () => {
         
         // Home siempre empieza con media vacío para mostrar logo y frases
         setState(prev => ({ ...prev, rootPageId: rootId, boards, media: [], isLoading: false, error: null }));
-        
-        // Limpiar la URL y establecer el estado inicial del historial en home
-        const url = new URL(window.location.href);
-        url.searchParams.delete('board');
-        window.history.replaceState({ boardId: null }, 'Portfolio', url.toString());
+
+        // Deep link: si la URL trae un ID de tablero en el path (/<id>), abrirlo.
+        // Se difiere a un efecto para que los tableros ya estén en el estado y
+        // el título/padre se resuelvan correctamente.
+        const deepLinkId = readBoardIdFromPath();
+        if (deepLinkId) {
+          const clean = NotionService.formatUUID(deepLinkId);
+          window.history.replaceState({ boardId: deepLinkId }, '', `/${clean}`);
+          pendingDeepLinkRef.current = deepLinkId;
+        } else {
+          window.history.replaceState({ boardId: null }, 'Portfolio', '/');
+        }
         
       } catch (err: any) {
         setState(prev => ({ ...prev, isLoading: false, error: `Error: ${err.message}` }));
@@ -264,6 +282,17 @@ const App: React.FC = () => {
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
+  }, [state.boards]);
+
+  // Ejecuta el deep-link pendiente una vez que los tableros están cargados.
+  useEffect(() => {
+    if (pendingDeepLinkRef.current && state.boards.length > 0) {
+      const id = pendingDeepLinkRef.current;
+      pendingDeepLinkRef.current = null;
+      isNavigatingRef.current = true; // no volver a hacer pushState
+      handleSelectBoard(id, true).finally(() => { isNavigatingRef.current = false; });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.boards]);
 
   const handleSelectBoard = async (boardId: string | null, forceRefresh = true) => {
