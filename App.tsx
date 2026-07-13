@@ -8,6 +8,18 @@ import { t } from './services/i18nService';
 
 const SHOW_DATABASE_NAMES = false; 
 
+// Invierte el orden del contenido dejando arriba las tarjetas de cabecera
+// (título y propiedades). Sirve para alternar ascendente/descendente.
+const reverseContent = (media: MediaItem[]): MediaItem[] => {
+  const head: MediaItem[] = [];
+  const body: MediaItem[] = [];
+  for (const m of media) {
+    if ((m.type === 'title' || m.type === 'properties') && body.length === 0) head.push(m);
+    else body.push(m);
+  }
+  return [...head, ...body.reverse()];
+};
+
 // Reconstruye un UUID con guiones (8-4-4-4-12) a partir de 32 hex sin guiones.
 const toDashedId = (hex: string): string => {
   const c = hex.replace(/-/g, '');
@@ -46,6 +58,8 @@ const App: React.FC = () => {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const [columnCount, setColumnCount] = useState(isMobile ? 1 : 4);
   const [effectsEnabled, setEffectsEnabled] = useState(false);
+  // Orden del contenido: true = más reciente primero (por defecto), false = ascendente.
+  const [descending, setDescending] = useState(true);
   const notionServiceRef = useRef<NotionService | null>(null);
   const allLoadedRef = useRef(false);
   const indexingRef = useRef(false);
@@ -372,8 +386,9 @@ const App: React.FC = () => {
         mediaItems.push(...newMedia);
       }
       // Si no hay media real, mediaItems queda vacío y MasonryGrid mostrará el home
-      
-      const finalMedia = mediaItems;
+      // Notion devuelve el contenido en orden ascendente (más antiguo primero);
+      // si el modo es descendente, invertimos el contenido (recientes arriba).
+      const finalMedia = descending ? reverseContent(mediaItems) : mediaItems;
 
       setState(prev => {
           const existingIds = new Set(prev.boards.map(b => b.id));
@@ -407,6 +422,13 @@ const App: React.FC = () => {
 
   const handleReorder = (newMedia: MediaItem[]) => {
     setState(prev => ({ ...prev, media: newMedia }));
+  };
+
+  // Alterna el orden del contenido (recientes primero / antiguos primero) sin
+  // recargar: invierte el contenido actual y guarda la preferencia.
+  const handleToggleOrder = () => {
+    setDescending(prev => !prev);
+    setState(prev => ({ ...prev, media: reverseContent(prev.media) }));
   };
 
   // Elimina (archiva) un tablero y lo quita del árbol junto a sus descendientes.
@@ -465,6 +487,8 @@ const App: React.FC = () => {
         }}
         onDeleteBoard={handleDeleteBoard}
         onRenameBoard={handleRenameBoard}
+        descending={descending}
+        onToggleOrder={handleToggleOrder}
         isOpen={isSidebarOpen}
         onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
         columnCount={columnCount}

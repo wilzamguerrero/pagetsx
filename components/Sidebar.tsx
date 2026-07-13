@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
     Folder, FileText, Database, ChevronRight, ChevronDown, ChevronLeft, 
     Maximize, Minimize, Circle, Home, Sparkles, Upload, Plus, Check, X, Search,
-    Pencil, Trash2
+    Pencil, Trash2, ArrowDownWideNarrow, ArrowUpWideNarrow
 } from 'lucide-react';
 import { t } from '../services/i18nService';
 import { UploadPanel } from './UploadPanel';
@@ -31,6 +31,8 @@ interface SidebarProps {
   isIndexing: boolean;
   onDeleteBoard: (board: Board) => Promise<void>;
   onRenameBoard: (board: Board, newTitle: string) => Promise<void>;
+  descending: boolean;
+  onToggleOrder: () => void;
 }
 
 const MARKER_COLORS = [
@@ -399,7 +401,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     boards, activeBoardId, onSelectBoard, onGoHome, onCreateBoard, isOpen, onToggle, 
     columnCount, onColumnChange, language, onToggleLanguage, showDatabaseNames,
     effectsEnabled, onToggleEffects, rootPageId, onContentUploaded,
-    onEnsureAllLoaded, isIndexing, onDeleteBoard, onRenameBoard
+    onEnsureAllLoaded, isIndexing, onDeleteBoard, onRenameBoard,
+    descending, onToggleOrder
 }) => {
   const strings = t(language);
   const [boardMarkers, setBoardMarkers] = useState<Record<string, string>>({});
@@ -527,6 +530,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
             <button onClick={toggleFullscreen} title="Pantalla completa (X)" className={getActionBtnClass(isFullscreen)}>
               {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={onToggleOrder}
+              title={descending ? 'Recientes primero' : 'Antiguos primero'}
+              className={getActionBtnClass(descending)}
+            >
+              {descending ? <ArrowDownWideNarrow className="w-4 h-4" /> : <ArrowUpWideNarrow className="w-4 h-4" />}
             </button>
             <button onClick={() => setUploadMode(prev => !prev)} title={uploadMode ? 'Modo subir: On (C)' : 'Modo subir: Off (C)'} className={getActionBtnClass(uploadMode)}>
               <Upload className="w-4 h-4" />
