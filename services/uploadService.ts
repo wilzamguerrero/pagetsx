@@ -47,38 +47,100 @@ const CHUNK_SIZE = 16 * 1024 * 1024; // 16 MiB
 const SMALL_FILE_THRESHOLD = 20 * 1024 * 1024; // 20 MiB
 const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5 GB (Notion limit)
 
-// Total de subidas simultáneas a Notion (compartido por TODOS los archivos).
-const GLOBAL_CONCURRENCY = 6;
-// Cuántos archivos pueden estar "en curso" a la vez (adaptado al tamaño).
-const SMALL_FILE_POOL = 6;
+// Concurrencia adaptativa (AIMD): el límite de subidas simultáneas a Notion
+// no es fijo, sino que crece poco a poco cuando todo va bien y se reduce a la
+// mitad en cuanto Notion responde con 429/503 (rate limit). Así se mantiene el
+// tubo lleno cerca del punto óptimo sin provocar tormentas de reintentos.
+const START_CONCURRENCY = 6; // punto de partida
+const MIN_CONCURRENCY = 2; // nunca bajar de aquí
+const MAX_CONCURRENCY = 12; // techo razonable para no saturar
+const THROTTLE_COOLDOWN_MS = 1500; // tras un 429/503, no volver a crecer un rato
+
+// Cuántos archivos pueden estar "en curso" a la vez. Para archivos pequeños se
+// deja que el semáforo adaptativo sea el que manda (pool = techo); para grandes,
+// pocos a la vez porque cada uno reparte muchas partes en el semáforo.
+const SMALL_FILE_POOL = MAX_CONCURRENCY;
 const LARGE_FILE_POOL = 3;
 
 const MAX_PART_RETRIES = 6;
 const MAX_SMALL_RETRIES = 4;
 
-/** Semáforo simple para limitar concurrencia. */
-class Semaphore {
-  private active = 0;
-  private queue: Array<() => void> = [];
-  constructor(private readonly max: number) {}
+/** Resultado de una operación de red, usado para ajustar la concurrencia. */
+type Outcome = "ok" | "throttle" | "error";
 
-  async acquire(): Promise<() => void> {
-    if (this.active < this.max) {
+/** ¿El status indica rate limit / saturación (reduce la concurrencia)? */
+const isThrottleStatus = (status: number): boolean => status === 429 || status === 503;
+
+/**
+ * Semáforo con concurrencia adaptativa (AIMD).
+ * - Incremento aditivo: tras una "ventana" de éxitos, +1 al límite.
+ * - Decremento multiplicativo: ante un throttle, el límite baja a la mitad.
+ * `acquire()` devuelve una función `release(outcome)` que se debe llamar
+ * indicando cómo fue la operación ("ok" | "throttle" | "error").
+ */
+class AdaptiveSemaphore {
+  private active = 0;
+  private limit: number;
+  private queue: Array<() => void> = [];
+  private successCredits = 0;
+  private cooldownUntil = 0;
+
+  constructor(start: number, private readonly min: number, private readonly max: number) {
+    this.limit = start;
+  }
+
+  get currentLimit(): number {
+    return this.limit;
+  }
+
+  async acquire(): Promise<(outcome?: Outcome) => void> {
+    if (this.active < this.limit) {
       this.active++;
-      return () => this.release();
+      return this.makeRelease();
     }
-    return new Promise<() => void>((resolve) => {
+    return new Promise<(outcome?: Outcome) => void>((resolve) => {
       this.queue.push(() => {
         this.active++;
-        resolve(() => this.release());
+        resolve(this.makeRelease());
       });
     });
   }
 
-  private release(): void {
-    this.active--;
-    const next = this.queue.shift();
-    if (next) next();
+  private makeRelease(): (outcome?: Outcome) => void {
+    let released = false;
+    return (outcome: Outcome = "ok") => {
+      if (released) return; // idempotente: evita doble release
+      released = true;
+      this.adjust(outcome);
+      this.active--;
+      this.pump();
+    };
+  }
+
+  private adjust(outcome: Outcome): void {
+    const now = Date.now();
+    if (outcome === "throttle") {
+      // Decremento multiplicativo + enfriamiento antes de volver a crecer.
+      this.limit = Math.max(this.min, Math.floor(this.limit / 2));
+      this.successCredits = 0;
+      this.cooldownUntil = now + THROTTLE_COOLDOWN_MS;
+    } else if (outcome === "ok") {
+      if (now < this.cooldownUntil) return;
+      // Incremento aditivo: +1 tras una ventana completa de éxitos.
+      this.successCredits++;
+      if (this.successCredits >= this.limit) {
+        this.successCredits = 0;
+        this.limit = Math.min(this.max, this.limit + 1);
+      }
+    }
+    // "error" (no throttle): no toca el límite.
+  }
+
+  private pump(): void {
+    while (this.active < this.limit && this.queue.length > 0) {
+      const next = this.queue.shift();
+      if (next) next();
+    }
   }
 }
 
@@ -139,7 +201,7 @@ export const uploadOneFile = async (
   file: File,
   fileIndex: number,
   totalFiles: number,
-  sem: Semaphore,
+  sem: AdaptiveSemaphore,
   onProgress?: ProgressCb,
   relativePath?: string
 ): Promise<UploadRecord> => {
@@ -167,10 +229,15 @@ export const uploadOneFile = async (
     report(0, `Subiendo ${label}...`);
     const data = await withRetry(async () => {
       const release = await sem.acquire();
+      let outcome: Outcome = "error";
       try {
         const fd = new FormData();
         fd.append("file", uploadFile, uploadFile.name);
         const res = await fetch("/api/upload-file", { method: "POST", body: fd });
+        if (isThrottleStatus(res.status)) {
+          outcome = "throttle";
+          throw new Error(`Notion saturado al subir "${originalName}" (${res.status}).`);
+        }
         const text = await res.text();
         let parsed: any;
         try {
@@ -181,9 +248,10 @@ export const uploadOneFile = async (
         if (!res.ok || !parsed.success) {
           throw new Error(parsed.error || `Error al subir "${originalName}"`);
         }
+        outcome = "ok";
         return parsed;
       } finally {
-        release();
+        release(outcome);
       }
     }, MAX_SMALL_RETRIES);
 
@@ -223,6 +291,7 @@ export const uploadOneFile = async (
   const uploadPart = (partNumber: number): Promise<void> =>
     withRetry(async () => {
       const release = await sem.acquire();
+      let outcome: Outcome = "error";
       try {
         const start = (partNumber - 1) * CHUNK_SIZE;
         const end = Math.min(start + CHUNK_SIZE, uploadFile.size);
@@ -237,6 +306,10 @@ export const uploadOneFile = async (
           method: "POST",
           body: chunkFd,
         });
+        if (isThrottleStatus(partRes.status)) {
+          outcome = "throttle";
+          throw new Error(`Notion saturado en parte ${partNumber} de "${originalName}" (${partRes.status}).`);
+        }
         const partText = await partRes.text();
         let partData: any;
         try {
@@ -248,11 +321,12 @@ export const uploadOneFile = async (
           throw new Error(partData.error || partData.message || `Error en parte ${partNumber}`);
         }
 
+        outcome = "ok";
         completedParts++;
         const pct = Math.min(98, Math.round((completedParts / numberOfParts) * 100));
         report(pct, `Subiendo ${label} — ${completedParts}/${numberOfParts} partes (${pct}%)`);
       } finally {
-        release();
+        release(outcome);
       }
     }, MAX_PART_RETRIES);
 
@@ -298,7 +372,7 @@ export const uploadFilesToBoard = async (
   onStep?: (step: string) => void
 ): Promise<{ count: number }> => {
   const records: UploadRecord[] = new Array(items.length);
-  const sem = new Semaphore(GLOBAL_CONCURRENCY);
+  const sem = new AdaptiveSemaphore(START_CONCURRENCY, MIN_CONCURRENCY, MAX_CONCURRENCY);
 
   // Pool de archivos adaptado: pocos archivos grandes a la vez (para que cada
   // uno acapare más huecos y termine antes) o muchos pequeños en paralelo.
