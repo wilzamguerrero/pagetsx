@@ -83,6 +83,8 @@ const App: React.FC = () => {
   // Detectar si es móvil para columnas por defecto
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const [columnCount, setColumnCount] = useState(isMobile ? 1 : 4);
+  // Incrementar esta versión ordena al grid borrar todos los tamaños personalizados.
+  const [cardScaleResetVersion, setCardScaleResetVersion] = useState(0);
   const [effectsEnabled, setEffectsEnabled] = useState(false);
   // Lista de páginas configuradas en el servidor (para el selector del sidebar).
   const [sites, setSites] = useState<{ index: number; rootPageId: string }[]>([]);
@@ -579,6 +581,7 @@ const App: React.FC = () => {
         onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
         columnCount={columnCount}
         onColumnChange={setColumnCount}
+        onResetCardScales={() => setCardScaleResetVersion(version => version + 1)}
         language={state.language}
         onToggleLanguage={() => setState(prev => ({ ...prev, language: prev.language === 'es' ? 'en' : 'es' }))}
         showDatabaseNames={SHOW_DATABASE_NAMES}
@@ -610,6 +613,7 @@ const App: React.FC = () => {
             items={state.media} 
             isLoading={state.isLoading} 
             columnCount={columnCount} 
+            scaleResetVersion={cardScaleResetVersion}
             language={state.language} 
             onReorder={handleReorder}
             isSidebarOpen={isSidebarOpen}

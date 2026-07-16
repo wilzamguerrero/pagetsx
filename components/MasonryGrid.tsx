@@ -1,11 +1,11 @@
 
-import React, { useEffect, useRef, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useMemo, useState, useLayoutEffect } from 'react';
+import Muuri from 'muuri';
 import { MediaItem, Language } from '../types';
 import { MediaCard, GroupedCard } from './MediaCard';
-import { motion, AnimatePresence } from 'framer-motion';
 import { t } from '../services/i18nService';
 import { groupContentForReading, GroupedMediaItem, numberListItems } from '../services/contentGrouper';
-import { Menu, Columns3, Maximize, UserRound, Home } from 'lucide-react';
+import { Menu, Columns3, Maximize, UserRound, Home, Plus, Minus } from 'lucide-react';
 import { Mirage } from 'ldrs/react';
 import 'ldrs/react/Mirage.css';
 
@@ -28,13 +28,14 @@ interface MasonryGridProps {
   items: MediaItem[];
   isLoading: boolean;
   columnCount: number;
+  scaleResetVersion?: number;
   language: Language;
   onReorder?: (items: MediaItem[]) => void;
   isSidebarOpen?: boolean;
   effectsEnabled?: boolean;
 }
 
-export const MasonryGrid: React.FC<MasonryGridProps> = ({ items, isLoading, columnCount, language, onReorder, isSidebarOpen = false, effectsEnabled = true }) => {
+export const MasonryGrid: React.FC<MasonryGridProps> = ({ items, isLoading, columnCount, scaleResetVersion = 0, language, onReorder, isSidebarOpen = false, effectsEnabled = true }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const galleryInstanceRef = useRef<any>(null);
   
@@ -175,16 +176,116 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({ items, isLoading, colu
     }
   }, [items.length, isLoading, language]);
 
-  const columns = useMemo(() => {
-    const cols: GroupedMediaItem[][] = Array.from({ length: columnCount }, () => []);
-    displayItems.forEach((item, index) => {
-      cols[index % columnCount].push(item);
-    });
-    return cols;
-  }, [displayItems, columnCount]);
-
   // Usar el orden original guardado en el ref (no cambia con reordenamientos)
   const orderIndexMap = originalOrderRef.current;
+
+  // ===== Tamaño (span de columnas) por tarjeta, persistente =====
+  // Permite hacer una tarjeta (p.ej. un video) más grande; las demás se
+  // reacomodan dinámicamente gracias al empaquetado "dense" de CSS grid.
+  // Resolución de la cuadrícula: cada columna se divide en 2 "unidades", así una
+  // tarjeta puede medir media columna (más pequeña que lo normal), una columna
+  // (tamaño por defecto) o varias.
+  const UNITS_PER_COL = 2;
+  const DEFAULT_SPAN = UNITS_PER_COL;            // tamaño normal = 1 columna
+  const totalTracks = columnCount * UNITS_PER_COL;
+
+  const [cardSpans, setCardSpans] = useState<Record<string, number>>({});
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('notio_card_spans_v2');
+      if (saved) setCardSpans(JSON.parse(saved));
+    } catch { /* noop */ }
+  }, []);
+
+  // El botón de reset del sidebar incrementa esta señal. Se borran tanto el
+  // estado actual como la persistencia para devolver todas las tarjetas al
+  // tamaño normal de una columna, sin recargar la página.
+  useEffect(() => {
+    if (scaleResetVersion <= 0) return;
+    try { localStorage.removeItem('notio_card_spans_v2'); } catch { /* noop */ }
+    setCardSpans({});
+  }, [scaleResetVersion]);
+
+  const setSpan = (id: string, span: number) => {
+    setCardSpans(prev => {
+      const next = { ...prev };
+      const maxUnits = columnCount * UNITS_PER_COL;
+      const clamped = Math.max(1, Math.min(span, maxUnits));
+      if (clamped === DEFAULT_SPAN) delete next[id]; else next[id] = clamped;
+      try { localStorage.setItem('notio_card_spans_v2', JSON.stringify(next)); } catch { /* noop */ }
+      return next;
+    });
+  };
+
+  // ===== Layout profesional con Muuri =====================================
+  // Muuri mide el DOM real y empaqueta las tarjetas sin solapes. `fillGaps`
+  // permite aprovechar cualquier hueco disponible cuando conviven tarjetas de
+  // distintos tamaños; el movimiento queda animado y nunca altera los datos.
+  const GRID_GAP = 20;
+  const muuriRef = useRef<Muuri | null>(null);
+  const layoutFrameRef = useRef<number>();
+  const layoutKey = displayItems.map(item => item.id).join('|');
+
+  const requestLayout = (instant = false) => {
+    if (layoutFrameRef.current) cancelAnimationFrame(layoutFrameRef.current);
+    layoutFrameRef.current = requestAnimationFrame(() => {
+      const grid = muuriRef.current;
+      if (!grid) return;
+      grid.refreshItems().layout(instant);
+    });
+  };
+
+  // Crear de nuevo la instancia solo cuando cambia la lista/orden de tarjetas.
+  // El nodo exterior lo posiciona Muuri; el contenido interior conserva su drag.
+  useLayoutEffect(() => {
+    const element = containerRef.current;
+    if (!element || displayItems.length === 0) return;
+
+    const grid = new Muuri(element, {
+      items: '.muuri-grid-item',
+      layout: {
+        fillGaps: true,
+        horizontal: false,
+        alignRight: false,
+        alignBottom: false,
+        rounding: true,
+      },
+      layoutOnResize: 100,
+      layoutDuration: 320,
+      layoutEasing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+      dragEnabled: false,
+    });
+    muuriRef.current = grid;
+
+    // Primera colocación instantánea: evita un salto desde (0,0).
+    grid.refreshItems().layout(true);
+
+    return () => {
+      if (layoutFrameRef.current) cancelAnimationFrame(layoutFrameRef.current);
+      if (muuriRef.current === grid) muuriRef.current = null;
+      grid.destroy(false);
+    };
+  }, [layoutKey]);
+
+  // Cuando cambia un span o el número de columnas, React actualiza primero los
+  // anchos y Muuri recalcula después las posiciones con una animación estable.
+  useLayoutEffect(() => {
+    requestLayout(false);
+    const secondPass = requestAnimationFrame(() => requestLayout(false));
+    return () => cancelAnimationFrame(secondPass);
+  }, [cardSpans, columnCount, layoutKey]);
+
+  // Imágenes, videos, iframes y texto pueden cambiar de alto tras renderizar.
+  // ResizeObserver refresca el motor en ese momento; Muuri vuelve a empaquetar
+  // desde las medidas reales, sin estimaciones ni filas artificiales.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver(() => requestLayout(false));
+    container.querySelectorAll<HTMLElement>('.muuri-item-content').forEach(el => observer.observe(el));
+    return () => observer.disconnect();
+  }, [layoutKey]);
 
   const handleDragEnd = (draggedId: string, info: any) => {
     if (!onReorder || !containerRef.current) return;
@@ -199,34 +300,31 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({ items, isLoading, colu
     
     let closestId: string | null = null;
     let minDistance = Infinity;
+    let directHit = false;
 
     cards.forEach((cardEl: any) => {
       const id = cardEl.getAttribute('data-card-id');
       if (id === draggedId) return;
 
       const rect = cardEl.getBoundingClientRect();
-      
-      // Verificar que el punto está dentro o cerca del área de la tarjeta
-      const isWithinBounds = 
-        point.x >= rect.left - 50 && 
-        point.x <= rect.right + 50 && 
-        point.y >= rect.top - 50 && 
-        point.y <= rect.bottom + 50;
-      
-      if (!isWithinBounds) return;
-      
-      const cardCenter = {
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2
-      };
 
-      const dx = point.x - cardCenter.x;
-      const dy = point.y - cardCenter.y;
-      const distance = Math.sqrt(dx * dx + dy * dy);
+      // Prioridad 1: si soltamos con el cursor SOBRE una tarjeta, esa es el destino.
+      const inside =
+        point.x >= rect.left && point.x <= rect.right &&
+        point.y >= rect.top && point.y <= rect.bottom;
+      if (inside) {
+        closestId = id;
+        directHit = true;
+        return;
+      }
+      if (directHit) return; // ya hay un destino directo
 
-      // Umbral basado en el tamaño de la tarjeta para mejor precisión
-      const threshold = Math.min(rect.width, rect.height) * 0.8;
-      if (distance < minDistance && distance < threshold) {
+      // Prioridad 2: la tarjeta cuyo centro esté más cerca del cursor (sin umbral,
+      // para que el reordenamiento no se sienta "pegado").
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const distance = Math.hypot(point.x - cx, point.y - cy);
+      if (distance < minDistance) {
         minDistance = distance;
         closestId = id;
       }
@@ -338,45 +436,68 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({ items, isLoading, colu
   }
 
   return (
-    <div ref={containerRef} className={`flex gap-3 lg:gap-5 w-full justify-center items-start ${isShuffling ? 'shuffling-active' : ''}`}>
-      {columns.map((colItems, colIndex) => (
-        <div key={colIndex} className="flex flex-col gap-3 lg:gap-5 flex-1 min-w-0">
-          <AnimatePresence mode="popLayout">
-            {colItems.map((item) => (
-              <motion.div 
-                key={item.id} 
-                data-card-id={item.id} 
-                className="w-full"
-                layout
-                initial={isShuffling ? { opacity: 0.5, scale: 0.95 } : false}
-                animate={{ 
-                  opacity: 1, 
-                  scale: 1,
-                  transition: { 
-                    type: "spring", 
-                    stiffness: 300, 
-                    damping: 25,
-                    duration: 0.5 
-                  }
-                }}
-                exit={{ opacity: 0, scale: 0.9 }}
+    <div
+      ref={containerRef}
+      className={`relative w-full ${isShuffling ? 'shuffling-active' : ''}`}
+      style={{ minHeight: 1 }}
+    >
+      {displayItems.map((item) => {
+        const span = Math.max(1, Math.min(cardSpans[item.id] || DEFAULT_SPAN, totalTracks));
+        // El ancho exterior incluye márgenes laterales de 10px. Así Muuri mide
+        // exactamente una fracción del grid y el espacio visible siempre es 20px.
+        const widthPercent = (span / totalTracks) * 100;
+        return (
+          <div
+            key={item.id}
+            className="muuri-grid-item absolute"
+            style={{
+              width: `calc(${widthPercent}% - ${GRID_GAP}px)`,
+              margin: `0 ${GRID_GAP / 2}px ${GRID_GAP}px`,
+              willChange: 'transform',
+              zIndex: 1,
+            }}
+          >
+            <div
+              data-card-id={item.id}
+              className="muuri-item-content relative group/size w-full"
+            >
+              {/* Controles de tamaño: agrandar/achicar la tarjeta. */}
+              <div
+                className="absolute top-2 right-2 z-[60] flex items-center gap-1 opacity-0 group-hover/size:opacity-100 transition-opacity"
+                onPointerDown={(e) => e.stopPropagation()}
               >
-                {item.isGroup && item.groupItems ? (
-                  <GroupedCard 
-                    items={item.groupItems} 
-                    language={language} 
-                    groupId={item.id}
-                    orderIndex={orderIndexMap.get(item.id)}
-                    onDragEnd={handleDragEnd}
-                  />
-                ) : (
-                  <MediaCard item={item} onDragEnd={handleDragEnd} orderIndex={orderIndexMap.get(item.id)} language={language} />
-                )}
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
-      ))}
+                <button
+                  onClick={(e) => { e.stopPropagation(); setSpan(item.id, span - 1); }}
+                  disabled={span <= 1}
+                  title="Más pequeño"
+                  className="w-6 h-6 flex items-center justify-center rounded-md bg-black/70 text-white backdrop-blur border border-white/10 hover:bg-black/90 transition-all disabled:opacity-30"
+                >
+                  <Minus className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setSpan(item.id, span + 1); }}
+                  disabled={span >= totalTracks}
+                  title="Más grande"
+                  className="w-6 h-6 flex items-center justify-center rounded-md bg-black/70 text-white backdrop-blur border border-white/10 hover:bg-black/90 transition-all disabled:opacity-30"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {item.isGroup && item.groupItems ? (
+                <GroupedCard
+                  items={item.groupItems}
+                  language={language}
+                  groupId={item.id}
+                  orderIndex={orderIndexMap.get(item.id)}
+                  onDragEnd={handleDragEnd}
+                />
+              ) : (
+                <MediaCard item={item} onDragEnd={handleDragEnd} orderIndex={orderIndexMap.get(item.id)} language={language} />
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 };

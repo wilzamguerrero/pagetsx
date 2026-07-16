@@ -189,7 +189,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onDragEnd, orderInde
   const dragConfig = useMemo(() => ({
     drag: isTouchDevice ? false : true as const,
     dragSnapToOrigin: true,
-    dragElastic: 0.1, 
+    dragElastic: 0.6,
     dragMomentum: false,
     dragListener: !isTouchDevice,
     onDragStart: () => setIsDragging(true),
@@ -199,14 +199,14 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onDragEnd, orderInde
       if (onDragEnd) onDragEnd(item.id, info);
     },
     whileDrag: { 
-      scale: 1.02,
+      scale: 1.06,
       zIndex: 100,
-      boxShadow: "0 20px 40px -10px rgba(0, 0, 0, 0.8)",
-      opacity: 0.98,
+      boxShadow: "0 24px 50px -10px rgba(0, 0, 0, 0.85)",
+      opacity: 0.95,
       cursor: 'grabbing'
     },
-    dragTransition: { bounceStiffness: 600, bounceDamping: 25 },
-    transition: { type: "spring" as const, stiffness: 600, damping: 30, mass: 0.4 }
+    dragTransition: { bounceStiffness: 500, bounceDamping: 30 },
+    transition: { type: "spring" as const, stiffness: 500, damping: 32, mass: 0.5 }
   }), [item.id, onDragEnd]);
 
   const preventNativeDrag = (e: React.DragEvent | React.MouseEvent) => {

@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
     Folder, FileText, Database, ChevronRight, ChevronDown, ChevronLeft, 
     Maximize, Minimize, Circle, Home, Sparkles, Upload, Plus, Check, X, Search,
-    Pencil, Trash2, ArrowDownWideNarrow, ArrowUpWideNarrow
+    Pencil, Trash2, ArrowDownWideNarrow, ArrowUpWideNarrow, RotateCcw
 } from 'lucide-react';
 import { t } from '../services/i18nService';
 import { UploadPanel } from './UploadPanel';
@@ -20,6 +20,7 @@ interface SidebarProps {
   onToggle: () => void;
   columnCount: number;
   onColumnChange: (cols: number) => void;
+  onResetCardScales: () => void;
   language: Language;
   onToggleLanguage: () => void;
   showDatabaseNames: boolean;
@@ -402,7 +403,7 @@ const BoardTreeItem: React.FC<{
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
     boards, activeBoardId, onSelectBoard, onGoHome, onCreateBoard, isOpen, onToggle, 
-    columnCount, onColumnChange, language, onToggleLanguage, showDatabaseNames,
+    columnCount, onColumnChange, onResetCardScales, language, onToggleLanguage, showDatabaseNames,
     effectsEnabled, onToggleEffects, rootPageId, sites, activeSite, onSelectSite, onContentUploaded,
     onEnsureAllLoaded, isIndexing, onDeleteBoard, onRenameBoard,
     descending, onToggleOrder
@@ -571,6 +572,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
               aria-label={strings.columns}
             />
             <span className="w-6 h-6 flex items-center justify-center rounded-md bg-primary text-black text-[11px] font-bold shrink-0">{columnCount}</span>
+            <button
+              type="button"
+              onClick={onResetCardScales}
+              title={language === 'es' ? 'Restaurar tamaños' : 'Reset sizes'}
+              aria-label={language === 'es' ? 'Restaurar tamaños de tarjetas' : 'Reset card sizes'}
+              className="w-6 h-6 flex items-center justify-center rounded-md bg-primary text-black shrink-0 transition-transform hover:scale-105"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           {/* Selector de páginas: centrado, de extremo a extremo, solo números */}
