@@ -6,6 +6,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { t } from '../services/i18nService';
 import { groupContentForReading, GroupedMediaItem, numberListItems } from '../services/contentGrouper';
 import { Menu, Columns3, Maximize, UserRound, Home } from 'lucide-react';
+import { Mirage } from 'ldrs/react';
+import 'ldrs/react/Mirage.css';
 
 // @ts-ignore
 import lightGallery from 'lightgallery';
@@ -323,37 +325,16 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({ items, isLoading, colu
   }, []);
 
   if (isLoading && items.length === 0) {
-    return <div className="flex flex-col items-center justify-center min-h-[100vh] w-full p-4"><div className="loader"></div></div>;
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[100vh] w-full p-4">
+        <Mirage size="70" speed="2.5" color="#ff3000" />
+      </div>
+    );
   }
 
   if (items.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-start min-h-screen w-full pt-[30vh] md:pt-[35vh] p-4">
-        <div className="flex flex-col items-center text-center w-full" style={{ maxWidth: '200px' }}>
-          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="relative w-52 h-52 md:w-60 md:h-60 bg-[#191919] border border-[#191919] rounded-[32px] flex items-center justify-center overflow-hidden z-10 mb-8">
-              <AnimatePresence>
-                {isPulsing && (
-                  <motion.svg initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 w-full h-full pointer-events-none z-20" viewBox="0 0 100 100" preserveAspectRatio="none">
-                    <motion.rect x="0.5" y="0.5" width="99" height="99" rx="14" fill="none" stroke="#00ffcc" strokeWidth="1" strokeDasharray="4 2" animate={{ strokeDashoffset: [0, -6] }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }} />
-                  </motion.svg>
-                )}
-              </AnimatePresence>
-              <img src="https://miro.medium.com/v2/resize:fit:1400/1*44799UW8y4KGlJb36fTD7Q.gif" alt="Logo" className="w-42 h-42 md:w-52 md:h-52 object-contain pointer-events-none select-none z-10" />
-          </motion.div>
-          <div className="h-28 flex flex-col items-center justify-start mx-auto relative">
-            <AnimatePresence mode="wait">
-              {isTextVisible ? (
-                <motion.p key={currentPhrase} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 1 }} className="text-gray-400 text-[10px] md:text-xs font-medium opacity-80">{currentPhrase}</motion.p>
-              ) : isPulsing ? (
-                <motion.div key="dots" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex gap-3 pt-6 items-center justify-center">
-                   {[0, 0.2, 0.4].map(d => <div key={d} className="w-1 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: `${d}s` }}></div>)}
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
-          </div>
-        </div>
-      </div>
-    );
+    // Home vacío: sin logo, sin animación y sin frases.
+    return <div className="min-h-screen w-full" />;
   }
 
   return (

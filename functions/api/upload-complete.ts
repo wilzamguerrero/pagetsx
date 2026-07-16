@@ -1,4 +1,5 @@
-import { json, getSecret, type Env, NOTION_VERSION, NOTION_BASE } from "../_shared/notion";
+import { json, type Env, NOTION_VERSION, NOTION_BASE } from "../_shared/notion";
+import { resolveSite } from "../_shared/sites";
 
 /**
  * POST /api/upload-complete
@@ -6,7 +7,7 @@ import { json, getSecret, type Env, NOTION_VERSION, NOTION_BASE } from "../_shar
  * Body: { uploadId: string }
  */
 export const onRequestPost: PagesFunction<Env> = async (context) => {
-  const notionSecret = getSecret(context.env);
+  const notionSecret = resolveSite(context.request, context.env).secret;
   if (!notionSecret) {
     return json({ error: "Notion no está configurado." }, 400);
   }

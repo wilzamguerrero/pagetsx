@@ -14,11 +14,14 @@ export const SHOW_LOGS = false;
 
 export class NotionService {
   private apiKey: string;
+  // Índice de página (?site=N) que el proxy usa para elegir el secreto correcto.
+  private siteIndex: number;
   private cache: Map<string, { data: any, timestamp: number }> = new Map();
   private CACHE_TTL = 5000; // 5 segundos - muy corto para actualizaciones rápidas
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, siteIndex: number = 1) {
     this.apiKey = apiKey;
+    this.siteIndex = Number.isFinite(siteIndex) && siteIndex >= 1 ? siteIndex : 1;
   }
 
   clearCache(): void {
@@ -57,8 +60,9 @@ export class NotionService {
   private async notionFetch(endpoint: string, method: string = 'GET', body?: any): Promise<any> {
     const timestamp = Date.now();
     
-    // Construir URL con parámetros
-    const url = `${API_BASE}?endpoint=${encodeURIComponent(endpoint)}&method=${method}&_t=${timestamp}`;
+    // Construir URL con parámetros (incluye la página activa para que el proxy
+    // seleccione el secreto de Notion correcto).
+    const url = `${API_BASE}?endpoint=${encodeURIComponent(endpoint)}&method=${method}&site=${this.siteIndex}&_t=${timestamp}`;
     
     if (SHOW_LOGS) console.log(`[NotionService] Fetching: ${method} ${endpoint}`);
     
@@ -263,23 +267,42 @@ export class NotionService {
     return { name, type, value, color };
   }
 
+  // Expande de forma RECURSIVA los contenedores de columnas (column_list /
+  // column). Así se lee el contenido de un toggle tanto si está directo como
+  // si está repartido en una o varias columnas, sin importar cuántos niveles
+  // de anidación tengan (columnas dentro de columnas incluidas).
+  // No desciende en toggles ni subpáginas: esos se cargan aparte como tableros.
   async getDeepBlockChildren(blocks: NotionBlock[], forceRefresh: boolean = false): Promise<NotionBlock[]> {
-    const expandedBlocks = [...blocks];
-    const columnLists = blocks.filter(b => b.type === 'column_list');
-    
-    if (columnLists.length > 0) {
-      const columns = await Promise.all(columnLists.map(cl => this.getBlockChildren(cl.id, forceRefresh)));
-      const flatColumns = columns.flat();
-      const columnContent = await Promise.all(flatColumns.map(col => this.getBlockChildren(col.id, forceRefresh)));
-      expandedBlocks.push(...flatColumns, ...columnContent.flat());
-    }
-    return expandedBlocks;
+    const containers = blocks.filter(
+      b => (b.type === 'column_list' || b.type === 'column') && b.has_children
+    );
+
+    if (containers.length === 0) return blocks;
+
+    // Traer los hijos de cada contenedor y expandirlos recursivamente.
+    const childrenLists = await Promise.all(
+      containers.map(c => this.getBlockChildren(c.id, forceRefresh))
+    );
+    const expandedChildren = await Promise.all(
+      childrenLists.map(children => this.getDeepBlockChildren(children, forceRefresh))
+    );
+
+    // Se mantienen los bloques originales y se añade el contenido de columnas.
+    return [...blocks, ...expandedChildren.flat()];
+  }
+
+  // Detecta un "toggle heading" (encabezado desplegable H1/H2/H3...).
+  static isToggleHeading(block: NotionBlock): boolean {
+    return /^heading_\d+$/.test(block.type) && block[block.type]?.is_toggleable === true;
   }
 
   extractBoards(blocks: NotionBlock[], parentId?: string): Board[] {
     return blocks
-      .filter((block): block is NotionToggleBlock | NotionPageBlock | NotionDatabaseBlock => 
-        block.type === 'toggle' || block.type === 'child_page' || block.type === 'child_database'
+      .filter(block =>
+        block.type === 'toggle' ||
+        block.type === 'child_page' ||
+        block.type === 'child_database' ||
+        NotionService.isToggleHeading(block)
       )
       .map(block => {
         let title = 'Sin título';
@@ -287,6 +310,10 @@ export class NotionService {
 
         if (block.type === 'toggle') {
           title = block.toggle?.rich_text?.map((t: any) => t.plain_text).join('') || 'Sin título';
+          type = 'toggle';
+        } else if (NotionService.isToggleHeading(block)) {
+          // Los toggle headings se comportan como toggles navegables.
+          title = block[block.type]?.rich_text?.map((t: any) => t.plain_text).join('') || 'Sin título';
           type = 'toggle';
         } else if (block.type === 'child_page') {
           title = block.child_page?.title || 'Sin título';
@@ -408,9 +435,25 @@ export class NotionService {
         metadata = { fileName: rawCaption || fileNameFromUrl };
       } else if (block.type === 'paragraph') {
         content = block.paragraph?.rich_text?.map((t: any) => t.plain_text).join('') || '';
-        // Incluir párrafos vacíos como separadores (doble espacio en Notion)
-        type = 'text';
+        const trimmed = content.trim();
+        // Si el párrafo es únicamente una URL, mostrarlo como enlace (tarjeta
+        // "ENLACE") en vez de texto plano, igual que los embed/bookmark.
+        if (/^https?:\/\/\S+$/i.test(trimmed)) {
+          const rt = block.paragraph?.rich_text?.[0];
+          const href = rt?.href || rt?.text?.link?.url || '';
+          type = 'link';
+          url = /^https?:\/\//i.test(href) ? href : trimmed;
+          content = url;
+        } else {
+          // Incluir párrafos vacíos como separadores (doble espacio en Notion)
+          type = 'text';
+        }
       } else if (block.type.startsWith('heading_')) {
+        // Los headings desplegables (toggle heading) se tratan como boards
+        // navegables en extractBoards, así que aquí no se muestran como texto.
+        if (NotionService.isToggleHeading(block)) {
+          return null;
+        }
         const level = parseInt(block.type.split('_')[1]);
         content = block[block.type]?.rich_text?.map((t: any) => t.plain_text).join('') || '';
         if (content.trim()) {

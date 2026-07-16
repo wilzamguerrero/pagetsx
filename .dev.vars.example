@@ -1,5 +1,18 @@
 # Copia este archivo como `.dev.vars` para desarrollo local con wrangler.
-# Estas variables las lee el servidor (Cloudflare Pages Functions).
+# Estas variables las lee el SERVIDOR (Cloudflare Pages Functions).
+# En producción, configúralas en el panel de Cloudflare Pages.
+#
+# Convención numerada: cada página usa ROOT_PAGE_IDn + NOTION_SECRETn.
+# La página activa se elige con ?site=N en la URL (por defecto 1).
 
-# Secreto de la integración de Notion (server-side).
-NOTION_PORTFOLIO_KEY="secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# Página 1 (por defecto, se abre en /)
+ROOT_PAGE_ID1="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+NOTION_SECRET1="ntn_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Página 2 (se abre con ?site=2)
+# ROOT_PAGE_ID2="..."
+# NOTION_SECRET2="..."
+
+# Página 3 (se abre con ?site=3)
+# ROOT_PAGE_ID3="..."
+# NOTION_SECRET3="..."

@@ -1,4 +1,5 @@
-import { json, getSecret, type Env, NOTION_VERSION, NOTION_BASE, resolveUploadMeta } from "../_shared/notion";
+import { json, type Env, NOTION_VERSION, NOTION_BASE, resolveUploadMeta } from "../_shared/notion";
+import { resolveSite } from "../_shared/sites";
 
 // 95 MiB — bajo el límite de 100 MB de body de Cloudflare por request.
 const MAX_FILE_SIZE = 95 * 1024 * 1024;
@@ -12,7 +13,7 @@ const MAX_FILE_SIZE = 95 * 1024 * 1024;
  * supone hacer upload-init y upload-part por separado desde el navegador.
  */
 export const onRequestPost: PagesFunction<Env> = async (context) => {
-  const notionSecret = getSecret(context.env);
+  const notionSecret = resolveSite(context.request, context.env).secret;
   if (!notionSecret) {
     return json({ error: "Notion no está configurado." }, 400);
   }

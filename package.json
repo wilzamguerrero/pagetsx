@@ -12,12 +12,13 @@
     "deploy": "vite build && wrangler pages deploy dist"
   },
   "dependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
     "framer-motion": "^11.11.17",
-    "lucide-react": "^0.460.0",
+    "jszip": "^3.10.1",
+    "ldrs": "^1.1.9",
     "lightgallery": "^2.8.2",
-    "jszip": "^3.10.1"
+    "lucide-react": "^0.460.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240909.0",

@@ -1,4 +1,5 @@
-import { getSecret, type Env } from "../_shared/notion";
+import { type Env } from "../_shared/notion";
+import { resolveSite } from "../_shared/sites";
 
 const NOTION_API_BASE = "https://api.notion.com/v1";
 // Kept at the stable version used by the content-reading logic (blocks/databases).
@@ -21,7 +22,7 @@ export const onRequestOptions: PagesFunction<Env> = async () => {
  * The Notion integration secret stays server-side.
  */
 const handler: PagesFunction<Env> = async (context) => {
-  const notionKey = getSecret(context.env);
+  const notionKey = resolveSite(context.request, context.env).secret;
   const url = new URL(context.request.url);
   const endpoint = url.searchParams.get("endpoint");
   const method = (url.searchParams.get("method") || "GET").toUpperCase();

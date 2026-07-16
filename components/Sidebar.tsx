@@ -26,6 +26,9 @@ interface SidebarProps {
   effectsEnabled: boolean;
   onToggleEffects: () => void;
   rootPageId: string;
+  sites?: { index: number; rootPageId: string }[];
+  activeSite?: number;
+  onSelectSite?: (index: number) => void;
   onContentUploaded: (boardId: string) => void;
   onEnsureAllLoaded: () => void;
   isIndexing: boolean;
@@ -400,7 +403,7 @@ const BoardTreeItem: React.FC<{
 export const Sidebar: React.FC<SidebarProps> = ({ 
     boards, activeBoardId, onSelectBoard, onGoHome, onCreateBoard, isOpen, onToggle, 
     columnCount, onColumnChange, language, onToggleLanguage, showDatabaseNames,
-    effectsEnabled, onToggleEffects, rootPageId, onContentUploaded,
+    effectsEnabled, onToggleEffects, rootPageId, sites, activeSite, onSelectSite, onContentUploaded,
     onEnsureAllLoaded, isIndexing, onDeleteBoard, onRenameBoard,
     descending, onToggleOrder
 }) => {
@@ -553,17 +556,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Barra de herramientas: columnas + buscador */}
         <div className="flex flex-col md:flex-row md:items-center gap-3 px-4 sm:px-6 py-3 border-b border-white/5">
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Columnas: slider horizontal que cambia el número al moverlo */}
+          <div className="flex items-center gap-3 shrink-0">
             <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest">{strings.columns}</span>
-            <div className="flex gap-1.5">
-              {[1,2,3,4,5,6].map(n => (
-                <button key={n} onClick={() => onColumnChange(n)} className={`w-8 h-8 flex items-center justify-center rounded-lg text-[11px] font-bold transition-all ${columnCount === n ? 'bg-primary text-black shadow-lg scale-105' : 'bg-white/5 text-gray-500 hover:text-white'}`}>
-                  {n}
-                </button>
-              ))}
-            </div>
+            <input
+              type="range"
+              min={1}
+              max={6}
+              step={1}
+              value={columnCount}
+              onChange={(e) => onColumnChange(parseInt(e.target.value, 10))}
+              className="col-slider w-24 sm:w-32"
+              style={{ ['--pct' as any]: `${((columnCount - 1) / 5) * 100}%` }}
+              aria-label={strings.columns}
+            />
+            <span className="w-6 h-6 flex items-center justify-center rounded-md bg-primary text-black text-[11px] font-bold shrink-0">{columnCount}</span>
           </div>
-          <div className="relative flex-1 md:max-w-sm md:ml-auto">
+
+          {/* Selector de páginas: centrado, de extremo a extremo, solo números */}
+          <div className="flex-1 flex items-center justify-center gap-1.5">
+            {sites && sites.length > 1 && sites.map(s => (
+              <button
+                key={s.index}
+                onClick={() => onSelectSite && onSelectSite(s.index)}
+                title={language === 'es' ? `Página ${s.index}` : `Page ${s.index}`}
+                className={`w-8 h-8 flex items-center justify-center rounded-lg text-[11px] font-bold transition-all ${activeSite === s.index ? 'bg-primary text-black shadow-lg scale-105' : 'bg-white/5 text-gray-500 hover:text-white'}`}
+              >
+                {s.index}
+              </button>
+            ))}
+          </div>
+
+          <div className="relative w-full md:w-72 shrink-0">
             <Search className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               value={searchQuery}

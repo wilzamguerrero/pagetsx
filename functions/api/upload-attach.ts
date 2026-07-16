@@ -1,12 +1,12 @@
 import {
   json,
-  getSecret,
   type Env,
   NOTION_VERSION,
   NOTION_BASE,
   IMAGE_MIME_TYPES,
   cleanNotionId,
 } from "../_shared/notion";
+import { resolveSite } from "../_shared/sites";
 
 // Extensiones de video que Notion acepta como bloque "video" reproducible.
 const VIDEO_EXTENSIONS = new Set([
@@ -103,7 +103,7 @@ function insertIntoTree(root: TreeNode, record: FileRecord): void {
 }
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
-  const notionSecret = getSecret(context.env);
+  const notionSecret = resolveSite(context.request, context.env).secret;
   if (!notionSecret) {
     return json({ error: "Notion no está configurado." }, 400);
   }

@@ -57,6 +57,55 @@
         scrollbar-width: none;
       }
 
+      /* Quitar la línea/contorno blanco que aparece al usar el teclado
+         (Alt, Tab, etc.) y el resaltado táctil en móvil. */
+      *:focus,
+      *:focus-visible {
+        outline: none !important;
+      }
+      * {
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      /* Slider de columnas: riel fino con relleno rojo y pulgar rectangular
+         (cuadrado, alargado en vertical). El relleno usa --pct (inline). */
+      .col-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        height: 6px;
+        border-radius: 4px;
+        background: transparent;
+        cursor: pointer;
+      }
+      .col-slider::-webkit-slider-runnable-track {
+        height: 6px;
+        border-radius: 4px;
+        background: linear-gradient(to right, #ff3000 var(--pct, 0%), rgba(255, 255, 255, 0.18) var(--pct, 0%));
+      }
+      .col-slider::-moz-range-track {
+        height: 6px;
+        border-radius: 4px;
+        background: linear-gradient(to right, #ff3000 var(--pct, 0%), rgba(255, 255, 255, 0.18) var(--pct, 0%));
+      }
+      .col-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 7px;
+        height: 18px;
+        border-radius: 2px;
+        background: #ff3000;
+        margin-top: -6px;
+        box-shadow: 0 0 6px rgba(255, 48, 0, 0.4);
+      }
+      .col-slider::-moz-range-thumb {
+        width: 7px;
+        height: 18px;
+        border-radius: 2px;
+        background: #ff3000;
+        border: none;
+        box-shadow: 0 0 6px rgba(255, 48, 0, 0.4);
+      }
+
       /* Custom LightGallery Overrides for modern look */
       .lg-backdrop {
         background-color: rgba(10, 10, 10, 0.98) !important;

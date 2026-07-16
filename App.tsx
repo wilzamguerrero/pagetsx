@@ -27,11 +27,37 @@ const toDashedId = (hex: string): string => {
   return `${c.slice(0, 8)}-${c.slice(8, 12)}-${c.slice(12, 16)}-${c.slice(16, 20)}-${c.slice(20)}`;
 };
 
-// Lee el ID de tablero desde el path actual (/<32hex>), o null si no hay.
-const readBoardIdFromPath = (): string | null => {
-  const raw = window.location.pathname.replace(/^\/+/, '').split(/[/?#]/)[0];
+// Divide el path en [página?, boardId?]. Si el primer segmento es un número
+// corto (p.ej. "2"), indica la página activa (/2 = página 2). El resto es el
+// ID del tablero. Ejemplos: "/" y "/<board>" = página 1; "/2" y "/2/<board>".
+const parsePath = (): { site: number; boardHex: string | null } => {
+  const segs = window.location.pathname.split('/').filter(Boolean);
+  let site = 1;
+  let rest = segs;
+  if (segs.length && /^\d{1,3}$/.test(segs[0])) {
+    const n = parseInt(segs[0], 10);
+    if (Number.isFinite(n) && n >= 1) site = n;
+    rest = segs.slice(1);
+  }
+  const raw = (rest[0] || '').split(/[?#]/)[0];
   const clean = raw.replace(/-/g, '');
-  return /^[a-f0-9]{32}$/i.test(clean) ? toDashedId(clean) : null;
+  const boardHex = /^[a-f0-9]{32}$/i.test(clean) ? toDashedId(clean) : null;
+  return { site, boardHex };
+};
+
+// Página activa según el path (/2 = página 2, / = página 1).
+const getSiteIndex = (): number => parsePath().site;
+
+// Lee el ID de tablero desde el path actual, ignorando el prefijo de página.
+const readBoardIdFromPath = (): string | null => parsePath().boardHex;
+
+// Construye el path conservando la página activa.
+// Página 1: "/" o "/<board>".  Página N: "/N" o "/N/<board>".
+const buildSitePath = (boardId: string | null): string => {
+  const site = getSiteIndex();
+  const prefix = site > 1 ? `/${site}` : '';
+  if (boardId) return `${prefix}/${NotionService.formatUUID(boardId)}`;
+  return prefix || '/';
 };
 
 const App: React.FC = () => {
@@ -58,6 +84,12 @@ const App: React.FC = () => {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const [columnCount, setColumnCount] = useState(isMobile ? 1 : 4);
   const [effectsEnabled, setEffectsEnabled] = useState(false);
+  // Lista de páginas configuradas en el servidor (para el selector del sidebar).
+  const [sites, setSites] = useState<{ index: number; rootPageId: string }[]>([]);
+  // Página activa (se cambia en caliente, sin recargar la app).
+  const [currentSite, setCurrentSite] = useState<number>(getSiteIndex());
+  const currentSiteRef = useRef<number>(currentSite);
+  currentSiteRef.current = currentSite;
   // Orden del contenido: true = más reciente primero (por defecto), false = ascendente.
   const [descending, setDescending] = useState(true);
   const notionServiceRef = useRef<NotionService | null>(null);
@@ -130,8 +162,9 @@ const App: React.FC = () => {
   const updateUrl = useCallback((boardId: string | null) => {
     if (isNavigatingRef.current) return;
 
-    // Ruta limpia: /<id-sin-guiones> para un tablero, o / para el home.
-    const path = boardId ? `/${NotionService.formatUUID(boardId)}` : '/';
+    // Ruta limpia conservando la página activa: /<board> (página 1) o
+    // /N/<board> (página N). El home es "/" o "/N".
+    const path = buildSitePath(boardId);
     const selectedBoard = state.boards.find(b => b.id === boardId);
     const title = selectedBoard?.title || 'Portfolio';
 
@@ -236,12 +269,14 @@ const App: React.FC = () => {
         // El token de Notion y el ID de la página raíz viven en el servidor
         // (Cloudflare Functions). Pedimos el ID de raíz en runtime; si el
         // build incluyó VITE_ROOT_PAGE_ID, se usa como respaldo.
+        const siteIndex = getSiteIndex();
         let rootId = ROOT_PAGE_ID;
         try {
-          const cfgRes = await fetch('/api/config');
+          const cfgRes = await fetch(`/api/config?site=${siteIndex}`);
           if (cfgRes.ok) {
             const cfg = await cfgRes.json();
             if (cfg.rootPageId) rootId = cfg.rootPageId;
+            if (Array.isArray(cfg.sites)) setSites(cfg.sites);
           }
         } catch (e) { /* usar respaldo de build */ }
 
@@ -250,7 +285,7 @@ const App: React.FC = () => {
           return;
         }
 
-        const service = new NotionService(NOTION_PORTFOLIO_KEY);
+        const service = new NotionService(NOTION_PORTFOLIO_KEY, siteIndex);
         notionServiceRef.current = service;
         const { boards } = await loadRootContent(service, rootId, true);
         
@@ -262,11 +297,10 @@ const App: React.FC = () => {
         // el título/padre se resuelvan correctamente.
         const deepLinkId = readBoardIdFromPath();
         if (deepLinkId) {
-          const clean = NotionService.formatUUID(deepLinkId);
-          window.history.replaceState({ boardId: deepLinkId }, '', `/${clean}`);
+          window.history.replaceState({ boardId: deepLinkId }, '', buildSitePath(deepLinkId));
           pendingDeepLinkRef.current = deepLinkId;
         } else {
-          window.history.replaceState({ boardId: null }, 'Portfolio', '/');
+          window.history.replaceState({ boardId: null }, 'Portfolio', buildSitePath(null));
         }
         
       } catch (err: any) {
@@ -279,6 +313,15 @@ const App: React.FC = () => {
   // Escuchar navegación con flechas del navegador (back/forward)
   useEffect(() => {
     const handlePopState = (event: PopStateEvent) => {
+      // Si la página (site) del path cambió, recargar el contenido de esa
+      // página sin refrescar el navegador.
+      const urlSite = getSiteIndex();
+      if (urlSite !== currentSiteRef.current) {
+        isNavigatingRef.current = true;
+        loadSite(urlSite, false).finally(() => { isNavigatingRef.current = false; });
+        return;
+      }
+
       const boardId = event.state?.boardId ?? null;
       isNavigatingRef.current = true;
       
@@ -296,7 +339,7 @@ const App: React.FC = () => {
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [state.boards]);
+  }, [state.boards, sites]);
 
   // Ejecuta el deep-link pendiente una vez que los tableros están cargados.
   useEffect(() => {
@@ -420,6 +463,49 @@ const App: React.FC = () => {
     updateUrl(null);
   };
 
+  // Cambia de página SIN recargar la app: recrea el servicio con el nuevo
+  // índice, recarga el árbol de tableros de esa página y actualiza la URL
+  // (/ o /N). El menú permanece abierto y solo cambia la información.
+  const loadSite = async (index: number, pushHistory: boolean) => {
+    const target = sites.find(s => s.index === index);
+    let rootId = target?.rootPageId || '';
+
+    if (pushHistory) {
+      isNavigatingRef.current = true;
+      window.history.pushState({ boardId: null }, 'Portfolio', index > 1 ? `/${index}` : '/');
+      isNavigatingRef.current = false;
+    }
+
+    setCurrentSite(index);
+    allLoadedRef.current = false; // reiniciar el índice de búsqueda
+    setState(prev => ({ ...prev, isLoading: true, activeBoardId: null, media: [], boards: [], error: null }));
+
+    try {
+      if (!rootId) {
+        const cfgRes = await fetch(`/api/config?site=${index}`);
+        if (cfgRes.ok) {
+          const cfg = await cfgRes.json();
+          rootId = cfg.rootPageId || '';
+        }
+      }
+      if (!rootId) {
+        setState(prev => ({ ...prev, isLoading: false, error: 'Falta ROOT_PAGE_ID en el servidor.' }));
+        return;
+      }
+      const service = new NotionService(NOTION_PORTFOLIO_KEY, index);
+      notionServiceRef.current = service;
+      const { boards } = await loadRootContent(service, rootId, true);
+      setState(prev => ({ ...prev, rootPageId: rootId, boards, media: [], isLoading: false, error: null }));
+    } catch (err: any) {
+      setState(prev => ({ ...prev, isLoading: false, error: 'Failed to load content.' }));
+    }
+  };
+
+  const handleSelectSite = (index: number) => {
+    if (index === currentSiteRef.current) return;
+    loadSite(index, true);
+  };
+
   const handleReorder = (newMedia: MediaItem[]) => {
     setState(prev => ({ ...prev, media: newMedia }));
   };
@@ -499,6 +585,9 @@ const App: React.FC = () => {
         effectsEnabled={effectsEnabled}
         onToggleEffects={() => setEffectsEnabled(prev => !prev)}
         rootPageId={state.rootPageId}
+        sites={sites}
+        activeSite={currentSite}
+        onSelectSite={handleSelectSite}
         onEnsureAllLoaded={loadAllBoards}
         isIndexing={isIndexing}
         onContentUploaded={(boardId) => {
